@@ -1,7 +1,7 @@
 {
   "name": "alambic",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "build": "vite build",
@@ -49,7 +49,9 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "shortcutName": "Alambic",
-      "license": "LICENSE"
+      "license": "LICENSE",
+      "include": "build/installer.nsh",
+      "artifactName": "Alambic-Setup-${version}.${ext}"
     },
     "asarUnpack": [
       "electron/separation-worker.js",
@@ -74,9 +76,17 @@
         "from": "THIRD_PARTY_NOTICES.md",
         "to": "licenses/THIRD_PARTY_NOTICES.md"
       }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "leiaperch",
+        "repo": "alambic"
+      }
     ]
   },
   "dependencies": {
+    "electron-updater": "6.8.10",
     "onnxruntime-node": "1.30.0"
   },
   "license": "GPL-3.0-or-later",

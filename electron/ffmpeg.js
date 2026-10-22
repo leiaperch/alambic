@@ -91,6 +91,17 @@ export class Ffmpeg {
 		return stdout;
 	}
 
+	/** Lance ffmpeg pour ses mesures : renvoie stderr (astats, vidstabdetect…), sortie vers null. */
+	async measure(args, { cwd } = {}) {
+		const { stderr } = await execFileAsync(this.#bin.ffmpeg, ['-hide_banner', '-nostats', ...args], {
+			cwd,
+			timeout: RAW_TIMEOUT_MS,
+			maxBuffer: PROBE_MAX_BUFFER,
+			windowsHide: true,
+		});
+		return stderr;
+	}
+
 	async frame(args, { cwd } = {}) {
 		const { stdout } = await execFileAsync(this.#bin.ffmpeg, ['-v', 'error', ...args, '-f', 'image2pipe', '-c:v', 'png', 'pipe:1'], {
 			cwd,

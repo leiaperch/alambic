@@ -99,7 +99,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 	height: 100vh;
 }
 .titlebar { grid-area: title; }
-.banner { grid-area: banner; }
+.banner, .update { grid-area: banner; }
+.update { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 8px 16px; background: var(--accent-soft); border-bottom: 1px solid var(--line); }
 .workspace { grid-area: work; }
 .dock { grid-area: dock; }
 
@@ -540,6 +541,57 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .crop__handle--s { left: 50%; top: 100%; cursor: ns-resize; }
 .crop__handle--sw { left: 0; top: 100%; cursor: nesw-resize; }
 .crop__handle--w { left: 0; top: 50%; cursor: ew-resize; }
+
+/* ---------- Zones floutées ---------- */
+
+.zones { position: absolute; pointer-events: none; }
+.zones--active { pointer-events: auto; cursor: crosshair; }
+.stage__source--blur .crop { pointer-events: none; }
+.stage__source--blur .crop__handle { display: none; }
+.zones__zone {
+	position: absolute;
+	border: 1.5px dashed #fff;
+	background: rgb(255 255 255 / 0.18);
+	box-shadow: 0 0 0 1px rgb(0 0 0 / 0.5);
+	backdrop-filter: blur(6px);
+}
+.zones__zone--draft { border-style: solid; }
+.zones__label {
+	position: absolute;
+	left: 4px;
+	top: 2px;
+	color: #fff;
+	font-size: 11px;
+	font-weight: 700;
+	font-variation-settings: var(--mono);
+	text-shadow: 0 1px 2px rgb(0 0 0 / 0.8);
+}
+.zones__remove {
+	position: absolute;
+	top: -11px;
+	right: -11px;
+	display: grid;
+	place-items: center;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	border: 0;
+	border-radius: 50%;
+	background: var(--accent);
+	color: var(--on-accent);
+	cursor: pointer;
+	pointer-events: auto;
+}
+.zones__remove .icon { width: 13px; height: 13px; }
+
+.logo-pick { display: flex; align-items: center; gap: 8px; }
+.logo-pick__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variation-settings: var(--mono); font-size: 12px; color: var(--text-2); }
+.section__sub summary { cursor: pointer; color: var(--text-2); font-size: 12.5px; }
+.section__sub[open] { display: flex; flex-direction: column; gap: 10px; }
+.zone-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.presets { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: var(--radius-sm); background: var(--surface-2); }
+.presets__row { display: flex; gap: 6px; }
+.presets__row .input { flex: 1; min-width: 0; }
 
 /* ---------- Timeline ---------- */
 

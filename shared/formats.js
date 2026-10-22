@@ -157,6 +157,17 @@ export const UPSCALE_STYLES = Object.freeze([
 	{ id: 'drawing', label: 'Dessin, anime' },
 ]);
 
+export const DENOISE_LEVELS = Object.freeze([
+	{ id: 'off', label: 'Non' },
+	{ id: 'light', label: 'Léger' },
+	{ id: 'strong', label: 'Fort' },
+]);
+
+export const LOGO_POSITIONS = Object.freeze([
+	{ id: 'tl', label: 'Haut gauche' }, { id: 'tr', label: 'Haut droite' }, { id: 'center', label: 'Centre' },
+	{ id: 'bl', label: 'Bas gauche' }, { id: 'br', label: 'Bas droite' },
+]);
+
 export const TEXT_POSITIONS = Object.freeze([
 	{ id: 'top', label: 'En haut' },
 	{ id: 'center', label: 'Au centre' },
@@ -205,6 +216,12 @@ export function emptyRecipe(output) {
 		watermark: { text: '', opacity: 0.18, size: 12 },
 		pageNumbers: false,
 		upscaleModel: 'photo',
+		denoise: 'off',
+		stabilize: false,
+		smoothMotion: false,
+		logo: { id: null, name: '', position: 'br', size: 15, opacity: 0.85 },
+		blurZones: [],
+		blurStrength: 20,
 		pages: '',
 		dpi: 150,
 	};

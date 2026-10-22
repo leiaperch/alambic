@@ -32,7 +32,7 @@ test('accélération matérielle seulement si demandée et détectée', () => {
 
 test('le texte est lu depuis un fichier, sans expansion des %', () => {
 	const { args } = buildJob({ source: video, recipe: recipe({ output: 'png', text: { content: '100%', size: 8, color: '#ffffff', position: 'bottom' } }), outputPath: 'o.png' });
-	const graph = args[args.indexOf('-vf') + 1];
+	const graph = args[args.indexOf('-filter_complex') + 1];
 	assert.match(graph, /textfile=text\.txt:expansion=none/);
 	assert.doesNotMatch(graph, /100%/);
 });

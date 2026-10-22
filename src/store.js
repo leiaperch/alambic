@@ -10,7 +10,7 @@ export const STATUS = Object.freeze({
 });
 
 /** Champs qui dépendent des dimensions ou de la durée d'un fichier : jamais recopiés d'un fichier à l'autre. */
-const PER_FILE_FIELDS = ['crop', 'trim', 'frameTime', 'pages'];
+const PER_FILE_FIELDS = ['crop', 'trim', 'frameTime', 'pages', 'pageOrder', 'blurZones'];
 
 /**
  * État de l'application. Émet `change` (détail : { id?, reason }) à chaque modification.
@@ -26,6 +26,8 @@ export class Store extends EventTarget {
 	cropAspect = null;
 	/** Position de lecture de l'éditeur, en secondes de la source. */
 	playhead = 0;
+	/** Outil de la souris sur l'aperçu : 'crop' (recadrer) ou 'blur' (ajouter une zone floutée). */
+	stageTool = 'crop';
 
 	setUi(patch) {
 		Object.assign(this, patch);
@@ -129,6 +131,18 @@ export class Store extends EventTarget {
 		if (!entry) return;
 		entry.recipe = emptyRecipe(entry.recipe.output);
 		this.#emit({ id, reason: 'recipe' });
+	}
+
+	/** Applique un préréglage : ses champs remplacent la recette, sauf ceux propres au fichier et une sortie incompatible. */
+	applyPreset(id, presetRecipe) {
+		const entry = this.#entries.get(id);
+		if (!entry) return;
+		const copy = { ...entry.recipe, ...structuredClone(presetRecipe) };
+		for (const field of PER_FILE_FIELDS) copy[field] = entry.recipe[field];
+		if (!outputsFor(entry.item.kind, entry.item.ext).includes(copy.output)) copy.output = entry.recipe.output;
+		entry.recipe = copy;
+		if (entry.status === STATUS.DONE) entry.status = STATUS.READY;
+		this.#emit({ id, reason: 'preset' });
 	}
 
 	/** Recopie la recette active sur la sélection, sauf les champs propres à chaque fichier et les sorties incompatibles. */

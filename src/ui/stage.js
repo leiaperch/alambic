@@ -2,6 +2,7 @@ import { h, icon, ICONS, formatTime, debounce } from '../dom.js';
 import { KIND, OUTPUTS, emptyRecipe } from '../../shared/formats.js';
 import { STATUS } from '../store.js';
 import { CropOverlay } from './crop.js';
+import { ZoneOverlay } from './zones.js';
 import { pdfPageCount, pdfPagePreview } from '../engines/pdf.js';
 import { PageGrid } from './page-grid.js';
 
@@ -25,6 +26,8 @@ export class Stage {
 	#media = null;
 	#viewport = null;
 	#crop = new CropOverlay((crop) => this.#store.active && this.#store.setRecipe(this.#store.active.id, 'crop', crop));
+	#zones = new ZoneOverlay((zones) => this.#store.active && this.#store.setRecipe(this.#store.active.id, 'blurZones', zones));
+	#source = null;
 	#render = null;
 	#renderUrl = null;
 	#renderToken = 0;
@@ -62,8 +65,10 @@ export class Stage {
 			return;
 		}
 		if (this.#grid && reason === 'recipe') this.#grid.render();
+		if (reason === 'preset') this.#build(active);
 		if (reason === 'recipe' || reason === 'ui') {
 			this.#crop.set(active.recipe.crop, this.#store.cropAspect);
+			this.#syncTool(active);
 			this.#syncTimeline();
 			if (this.#tab === TAB.RENDER) this.#schedulePreview();
 		}
@@ -148,9 +153,18 @@ export class Stage {
 		if (playable) this.#media.addEventListener('error', () => this.#fallbackToFrames(entry), { once: true });
 		this.#media.addEventListener(playable ? 'loadedmetadata' : 'load', () => this.#layoutCrop());
 		this.#render = h('img', { class: 'stage__render', alt: 'Aperçu du rendu final' });
-		this.#viewport.append(h('div', { class: 'stage__source' }, this.#media, this.#crop.element), this.#render,
+		this.#source = h('div', { class: 'stage__source' }, this.#media, this.#crop.element, this.#zones.element);
+		this.#viewport.append(this.#source, this.#render,
 			h('p', { class: 'stage__hint', text: 'Glisse sur l’image pour recadrer' }));
 		this.#crop.set(entry.recipe.crop, this.#store.cropAspect);
+		this.#syncTool(entry);
+	}
+
+	/** En mode flou, le cadre de recadrage ne capte plus la souris et le calque des zones prend le relais. */
+	#syncTool(entry) {
+		const blur = this.#store.stageTool === 'blur';
+		this.#source?.classList.toggle('stage__source--blur', blur);
+		this.#zones.set(entry.recipe.blurZones, blur);
 	}
 
 	/** Conteneur que Chromium ne sait pas lire (AVI, WMV…) : on affiche des images calculées par ffmpeg. */
@@ -181,6 +195,7 @@ export class Stage {
 		rect.left = (box.width - rect.width) / 2;
 		rect.top = (box.height - rect.height) / 2;
 		this.#crop.layout(rect, { width, height });
+		this.#zones.layout(rect, { width, height });
 	}
 
 	async #refreshRender() {

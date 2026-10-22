@@ -47,6 +47,23 @@ const TRUE_PEAK = -1.5;
 const LOUDNESS_RANGE = 11;
 const AUDIO_SAMPLE_RATE = 48000;
 const SPRITE_DEFAULT_FPS = 12;
+const STABILIZE_SMOOTHING = 20;
+const STABILIZE_SHAKINESS = 6;
+const STABILIZE_ACCURACY = 15;
+const STABILIZE_SHARPEN = 'unsharp=5:5:0.6:3:3:0.3';
+const DEFAULT_BLUR = 20;
+const BLUR_PASSES = 2;
+const LOGO_MARGIN_RATIO = 0.03;
+const FALLBACK_LOGO_BASE = 1280;
+/** Réduction du bruit (dB) par niveau ; passe-haut contre le ronflement grave. */
+const DENOISE_REDUCTION = Object.freeze({ light: 12, strong: 24 });
+const DENOISE_HIGHPASS_HZ = 80;
+/** Le plancher donné à afftdn doit coller au bruit réel : mesuré par astats, relevé de 3 dB, borné. */
+const NOISE_FLOOR_MARGIN_DB = 3;
+const NOISE_FLOOR_MIN_DB = -80;
+const NOISE_FLOOR_MAX_DB = -20;
+const NOISE_FLOOR_FALLBACK_DB = -35;
+const DEFAULT_FPS = 30;
 const SUBTITLE_STYLE = 'FontName=Segoe UI Semibold,Fontsize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H99000000,BorderStyle=1,Outline=1.6,Shadow=0,MarginV=18';
 /** Au-delà, la planche dépasse vite les limites de taille d'image des encodeurs et des navigateurs. */
 const SPRITE_MAX_FRAMES = 400;
@@ -104,6 +121,79 @@ function colorFilters(recipe) {
 	const graph = FILTER_GRAPHS[recipe.filter];
 	if (graph) chain.push(graph);
 	return chain;
+}
+
+/**
+ * Filtres appliqués sur l'image source, avant le recadrage : stabilisation (fichier de mouvements calculé
+ * par le processus principal) puis zones floutées, dont les coordonnées sont en pixels de la source.
+ */
+function sourceFilters(recipe) {
+	const chain = [];
+	if (recipe.stabilizeFile) chain.push(`vidstabtransform=input=${recipe.stabilizeFile}:smoothing=${STABILIZE_SMOOTHING}:optzoom=1:interpol=bicubic`, STABILIZE_SHARPEN);
+	(recipe.blurZones ?? []).forEach((zone, index) => {
+		const w = Math.max(2, Math.round(zone.w));
+		const h = Math.max(2, Math.round(zone.h));
+		// boxblur refuse un rayon supérieur à la moitié du plus petit côté.
+		const radius = Math.max(1, Math.min(recipe.blurStrength ?? DEFAULT_BLUR, Math.floor(Math.min(w, h) / 2) - 1));
+		chain.push(`split[bz${index}a][bz${index}b];[bz${index}b]crop=${w}:${h}:${Math.round(zone.x)}:${Math.round(zone.y)},boxblur=${radius}:${BLUR_PASSES}[bz${index}c];[bz${index}a][bz${index}c]overlay=${Math.round(zone.x)}:${Math.round(zone.y)}`);
+	});
+	return chain;
+}
+
+/** Largeur finale après recadrage, rotation et redimensionnement ; null si la source n'est pas mesurée. */
+export function outputWidth(source, recipe) {
+	let width = recipe.crop?.w ?? source.width;
+	let height = recipe.crop?.h ?? source.height;
+	if (!width || !height) return null;
+	if (recipe.rotate === 90 || recipe.rotate === 270) [width, height] = [height, width];
+	if (recipe.width) return recipe.width;
+	if (recipe.height) return Math.round((width * recipe.height) / height);
+	return width;
+}
+
+/**
+ * Logo (entrée n° 1, bouclée) posé dans un coin après les retouches. Fragment de graphe qui commence par
+ * un libellé : joinChain le colle sans virgule à la sortie du filtre précédent.
+ */
+function logoFilter(source, recipe) {
+	if (!source.logoPath || !recipe.logo?.id) return [];
+	const width = outputWidth(source, recipe) ?? FALLBACK_LOGO_BASE;
+	const logoWidth = Math.max(2, Math.round((width * recipe.logo.size) / PERCENT));
+	const margin = Math.round(width * LOGO_MARGIN_RATIO);
+	const positions = {
+		tl: [margin, margin],
+		tr: [`W-w-${margin}`, margin],
+		bl: [margin, `H-h-${margin}`],
+		br: [`W-w-${margin}`, `H-h-${margin}`],
+		center: ['(W-w)/2', '(H-h)/2'],
+	};
+	const [x, y] = positions[recipe.logo.position] ?? positions.br;
+	return [`[lgbase];[1:v]scale=${logoWidth}:-1,format=rgba,colorchannelmixer=aa=${recipe.logo.opacity}[lg];[lgbase][lg]overlay=${x}:${y}:shortest=1:format=auto`];
+}
+
+export function logoInput(source, recipe) {
+	return source.logoPath && recipe.logo?.id ? ['-loop', '1', '-i', source.logoPath] : [];
+}
+
+/** Chaîne de filtres → texte ; un élément qui commence par « [ » se colle au précédent sans virgule. */
+export function joinChain(chain) {
+	if (!chain.length) return 'null';
+	return chain.reduce((text, element) => {
+		if (element.startsWith('[')) return (text || 'null') + element;
+		return text ? `${text},${element}` : element;
+	}, '');
+}
+
+/** Tout ce qui touche l'image, dans l'ordre : source, géométrie, couleur, sous-titres, texte, logo. */
+function pictureChain(source, recipe, { evenDimensions }) {
+	return [
+		...sourceFilters(recipe),
+		...geometryFilters(source, recipe, { evenDimensions }),
+		...colorFilters(recipe),
+		...subtitleFilter(recipe),
+		...textFilter(source, recipe),
+		...logoFilter(source, recipe),
+	];
 }
 
 /** Hauteur finale après recadrage, rotation et redimensionnement ; null si la source n'est pas mesurée. */
@@ -256,7 +346,7 @@ function metadataArgs(recipe) {
 
 /** Volume, vitesse, sens, fondus puis normalisation EBU R128 ; `duration` est la durée de sortie. */
 function audioFilters(recipe, duration) {
-	const chain = [];
+	const chain = [...denoiseFilters(recipe)];
 	if (recipe.volume !== 1) chain.push(`volume=${recipe.volume}`);
 	chain.push(...atempoChain(recipe.speed));
 	if (recipe.reverse) chain.push('areverse');
@@ -265,6 +355,29 @@ function audioFilters(recipe, duration) {
 	// loudnorm travaille en 192 kHz : on revient à une fréquence standard.
 	if (recipe.normalize) chain.push(`loudnorm=I=${LOUDNESS_TARGET}:TP=${TRUE_PEAK}:LRA=${LOUDNESS_RANGE}`, `aresample=${AUDIO_SAMPLE_RATE}`);
 	return chain;
+}
+
+/**
+ * afftdn avec son option de suivi (tn) ne retirait presque rien sur un souffle constant ; avec un plancher fixe
+ * proche du bruit mesuré (`recipe.noiseFloor`, fourni par le processus principal), il retire 12 à 19 dB.
+ */
+function denoiseFilters(recipe) {
+	const reduction = DENOISE_REDUCTION[recipe.denoise];
+	if (!reduction) return [];
+	const measured = Number.isFinite(recipe.noiseFloor) ? recipe.noiseFloor + NOISE_FLOOR_MARGIN_DB : NOISE_FLOOR_FALLBACK_DB;
+	const floor = Math.min(NOISE_FLOOR_MAX_DB, Math.max(NOISE_FLOOR_MIN_DB, measured));
+	return [`highpass=f=${DENOISE_HIGHPASS_HZ}`, `afftdn=nr=${reduction}:nf=${floor.toFixed(1)}`];
+}
+
+/** Mesure du plancher de bruit, sur la même portion que l'encodage. */
+export function buildNoiseFloorArgs(source, recipe) {
+	return [...inputArgs(source, recipe, { still: false }), '-vn', '-af',
+		`highpass=f=${DENOISE_HIGHPASS_HZ},astats=measure_overall=Noise_floor:measure_perchannel=none`, '-f', 'null', '-'];
+}
+
+export function parseNoiseFloor(stderr) {
+	const match = /Noise floor dB:\s*(-?[\d.]+)/i.exec(stderr);
+	return match ? Number(match[1]) : null;
 }
 
 function videoFades(recipe, duration) {
@@ -287,23 +400,28 @@ function buildAudioJob(source, recipe, outputPath) {
 function buildFramesJob(source, recipe, outputPath) {
 	const output = OUTPUTS[recipe.output];
 	const duration = outputDuration(source, recipe);
-	const chain = [...geometryFilters(source, recipe, { evenDimensions: false }), ...colorFilters(recipe), ...textFilter(source, recipe)];
+	const chain = pictureChain(source, recipe, { evenDimensions: false });
 	if (recipe.speed !== 1) chain.push(`setpts=PTS/${recipe.speed}`);
 	if (recipe.reverse) chain.push('reverse');
-	const args = [...inputArgs(source, recipe, { still: false })];
+	const args = [...inputArgs(source, recipe, { still: false }), ...logoInput(source, recipe)];
 	if (output.sprite) {
 		const fps = recipe.fps ?? Math.round(source.fps ?? SPRITE_DEFAULT_FPS) ?? SPRITE_DEFAULT_FPS;
 		const { columns, rows, count } = spriteLayout(duration, fps, recipe.spriteColumns);
 		chain.push(`fps=${fps}`, `tile=layout=${columns}x${rows}:nb_frames=${count}`);
-		args.push('-vf', chain.join(','), '-frames:v', '1', '-update', '1', '-c:v', 'png', outputPath);
+		args.push('-filter_complex', `[0:v]${joinChain(chain)}[vout]`, '-map', '[vout]', '-frames:v', '1', '-update', '1', '-c:v', 'png', outputPath);
 		return { args, duration: 0, layout: { columns, rows, count } };
 	}
 	if (recipe.fps) chain.push(`fps=${recipe.fps}`);
-	if (chain.length) args.push('-vf', chain.join(','));
+	args.push('-filter_complex', `[0:v]${joinChain(chain)}[vout]`, '-map', '[vout]');
 	args.push('-fps_mode', 'passthrough', '-start_number', '1');
 	if (recipe.output === 'frames-jpg') args.push('-q:v', String(JPG_QSCALE[q(recipe)]));
 	args.push(outputPath);
 	return { args, duration };
+}
+
+/** Première passe de stabilisation : mêmes bornes de découpe que l'encodage, pour que les trames se correspondent. */
+export function buildStabilizeArgs(source, recipe, resultFile) {
+	return [...inputArgs(source, recipe, { still: false }), '-vf', `vidstabdetect=shakiness=${STABILIZE_SHAKINESS}:accuracy=${STABILIZE_ACCURACY}:result=${resultFile}`, '-f', 'null', '-'];
 }
 
 /** Grille presque carrée ; `columns` imposé par l'utilisateur sinon racine du nombre d'images. */
@@ -314,10 +432,10 @@ export function spriteLayout(duration, fps, columns = null) {
 }
 
 function buildStillJob(source, recipe, outputPath) {
-	const chain = [...geometryFilters(source, recipe, { evenDimensions: false }), ...colorFilters(recipe), ...textFilter(source, recipe)];
+	const chain = pictureChain(source, recipe, { evenDimensions: false });
 	if (recipe.output === 'ico') chain.push(`scale=${ICO_MAX_SIZE}:${ICO_MAX_SIZE}:force_original_aspect_ratio=decrease`);
-	const args = [...inputArgs(source, recipe, { still: true }), '-frames:v', '1', '-update', '1'];
-	if (chain.length) args.push('-vf', chain.join(','));
+	const args = [...inputArgs(source, recipe, { still: true }), ...logoInput(source, recipe),
+		'-filter_complex', `[0:v]${joinChain(chain)}[vout]`, '-map', '[vout]', '-frames:v', '1', '-update', '1'];
 	args.push(...stillCodecArgs(recipe.output, recipe), outputPath);
 	return { args, duration: 0 };
 }
@@ -328,15 +446,21 @@ function buildMotionJob(source, recipe, outputPath, hardware) {
 	const duration = outputDuration(source, recipe);
 	const keepAudio = OUTPUTS[outputId].audio && source.hasAudio && !recipe.mute && !recipe.boomerang;
 
-	const video = [...geometryFilters(source, recipe, { evenDimensions: !isAnim }), ...colorFilters(recipe), ...subtitleFilter(recipe), ...textFilter(source, recipe)];
+	const video = pictureChain(source, recipe, { evenDimensions: !isAnim });
 	if (recipe.speed !== 1) video.push(`setpts=PTS/${recipe.speed}`);
 	const fps = recipe.fps ?? (isAnim && source.kind === 'video' ? Math.min(source.fps ?? ANIM_DEFAULT_FPS_FROM_VIDEO, ANIM_DEFAULT_FPS_FROM_VIDEO) : null);
-	if (fps) video.push(`fps=${fps}`);
+	// Ralenti fluide : minterpolate invente les images manquantes au lieu de répéter les existantes (lent).
+	if (recipe.smoothMotion && recipe.speed < 1) {
+		const target = fps ?? Math.round(source.fps ?? DEFAULT_FPS);
+		video.push(`minterpolate=fps=${target}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1`);
+	} else if (fps) {
+		video.push(`fps=${fps}`);
+	}
 	if (recipe.reverse) video.push('reverse');
 	if (!recipe.boomerang) video.push(...videoFades(recipe, duration));
 	if (!isAnim) video.push('format=yuv420p');
 
-	const graph = [`[0:v]${video.length ? video.join(',') : 'null'}[v0]`];
+	const graph = [`[0:v]${joinChain(video)}[v0]`];
 	let last = 'v0';
 	if (recipe.boomerang) {
 		const fades = videoFades(recipe, duration);
@@ -350,7 +474,7 @@ function buildMotionJob(source, recipe, outputPath, hardware) {
 			`[g1][pal]paletteuse=dither=${dither}:diff_mode=rectangle[vg]`);
 		last = 'vg';
 	}
-	const args = [...inputArgs(source, recipe, { still: false })];
+	const args = [...inputArgs(source, recipe, { still: false }), ...logoInput(source, recipe)];
 	if (keepAudio) {
 		const audio = audioFilters(recipe, duration);
 		graph.push(`[0:a:0]${audio.length ? audio.join(',') : 'anull'}[a0]`);
@@ -380,12 +504,12 @@ function buildMotionJob(source, recipe, outputPath, hardware) {
 	return { args, duration };
 }
 
-/** Aperçu d'une image du rendu : géométrie, couleur et texte, sans temps ni vitesse. */
+/** Aperçu d'une image du rendu : zones floutées, géométrie, couleur, texte et logo, sans stabilisation, temps ni vitesse. */
 export function buildPreviewArgs(source, recipe, time, maxWidth) {
-	const chain = [...geometryFilters(source, recipe, { evenDimensions: false }), ...colorFilters(recipe), ...textFilter(source, recipe)];
+	const chain = pictureChain(source, { ...recipe, stabilizeFile: null }, { evenDimensions: false });
 	chain.push(`scale='min(${maxWidth},iw)':-1`);
 	const seek = source.duration && time > 0 ? ['-ss', String(Math.min(time, source.duration))] : [];
-	return [...seek, '-i', source.path, '-frames:v', '1', '-vf', chain.join(',')];
+	return [...seek, '-i', source.path, ...logoInput(source, recipe), '-filter_complex', `[0:v]${joinChain(chain)}[vout]`, '-map', '[vout]', '-frames:v', '1'];
 }
 
 /** Vignette carrée pour la file. */

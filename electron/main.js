@@ -1,12 +1,14 @@
 import { app, BrowserWindow, ipcMain, dialog, protocol, shell, nativeTheme } from 'electron';
-import { createReadStream } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
 import { stat, writeFile, readFile, unlink, mkdir } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Ffmpeg } from './ffmpeg.js';
 import { Library, isAnimatedWebp, summarize } from './library.js';
-import { buildJob, buildPreviewArgs, buildThumbArgs } from './recipe.js';
+import { buildJob, buildPreviewArgs, buildThumbArgs, buildStabilizeArgs, buildNoiseFloorArgs, parseNoiseFloor } from './recipe.js';
+import { Logos, Presets } from './presets.js';
+import { Updater } from './updater.js';
 import { isWordAvailable, convertWithWord } from './office.js';
 import { Ytdlp, locateYtdlp, validateUrl, buildDownloadArgs, LINK_MODES } from './ytdlp.js';
 import { ModelStore, MODELS, buildWhisperArgs, filterPath, tidySrt, srtToText } from './whisper.js';
@@ -37,6 +39,8 @@ const UPSCALE_SHARE = 0.95;
 const MATTING_PREPARED = 0.1;
 const STEM_RATE = 44100;
 const STEMS_SHARE = 0.95;
+const STAB_FILE = 'stab.trf';
+const STAB_SHARE = 0.5;
 /** La page est servie en file:// : sans cet en-tête, fetch() refuse de lire media://. */
 const CORS = { 'Access-Control-Allow-Origin': '*' };
 
@@ -51,6 +55,11 @@ let models = null;
 let upscaler = null;
 let matting = null;
 let stems = null;
+let presets = null;
+const logos = new Logos();
+const updater = new Updater();
+/** Fichiers reçus par la ligne de commande (clic droit « Convertir avec Alambic ») avant que l'interface soit prête. */
+let pendingOpen = [];
 let window = null;
 let status = null;
 
@@ -138,8 +147,33 @@ async function analyze(id) {
 	return publicItem(item);
 }
 
-function sourceOf(item) {
-	return { path: item.source, kind: item.kind, width: item.info?.width ?? null, height: item.info?.height ?? null, duration: item.info?.duration ?? null, hasAudio: item.info?.hasAudio ?? false, fps: item.info?.fps ?? null };
+function sourceOf(item, recipe = null) {
+	return {
+		path: item.source, kind: item.kind, width: item.info?.width ?? null, height: item.info?.height ?? null,
+		duration: item.info?.duration ?? null, hasAudio: item.info?.hasAudio ?? false, fps: item.info?.fps ?? null,
+		logoPath: logos.path(recipe?.logo?.id),
+	};
+}
+
+/**
+ * Passes de mesure avant l'encodage : mouvements de caméra (vidstabdetect) et plancher de bruit (astats).
+ * La stabilisation occupe la première moitié de la barre de progression.
+ */
+async function measurePasses(jobId, item, recipe, output, cwd, send) {
+	const source = sourceOf(item, recipe);
+	const visual = output.motion || output.sequence || output.sprite;
+	let offset = 0;
+	if (recipe.stabilize && visual && (item.kind === KIND.VIDEO || item.kind === KIND.ANIMATED)) {
+		await unlink(join(cwd, STAB_FILE)).catch(() => {});
+		await ffmpeg.run(jobId, buildStabilizeArgs(source, recipe, STAB_FILE), { duration: source.duration ?? 0, cwd, onProgress: (ratio) => send(ratio * STAB_SHARE) });
+		recipe.stabilizeFile = STAB_FILE;
+		offset = STAB_SHARE;
+	}
+	const audible = output.audioOnly || (output.audio && !recipe.mute);
+	if (recipe.denoise !== 'off' && source.hasAudio && audible) {
+		recipe.noiseFloor = parseNoiseFloor(await ffmpeg.measure(buildNoiseFloorArgs(source, recipe), { cwd }));
+	}
+	return offset;
 }
 
 /** Le WebP animé est décodé par Chromium image par image ; on le reconstruit ici en FFV1 sans perte. */
@@ -200,7 +234,7 @@ async function runWhisper(jobId, id, recipe, outputDir) {
 		modelPath: filterPath(models.path(modelName), cwd), vadPath: filterPath(models.path('vad'), cwd), destination: 'whisper.srt',
 	});
 	await unlink(join(cwd, 'whisper.srt')).catch(() => {});
-	const source = sourceOf(item);
+	const source = sourceOf(item, recipe);
 	const spoken = recipe.trim ? recipe.trim.end - recipe.trim.start : source.duration ?? 0;
 	await ffmpeg.run(jobId, args, { duration: spoken, cwd, onProgress: progress(0) });
 	const srt = tidySrt(await readFile(join(cwd, 'whisper.srt'), 'utf8'));
@@ -231,7 +265,7 @@ async function runUpscale(jobId, id, recipe, outputDir) {
 	await library.writeText(id, recipe.text.content);
 	const prepared = join(cwd, 'upscale-in.png');
 	const enlarged = join(cwd, 'upscale-out.png');
-	const pre = buildJob({ source: sourceOf(item), recipe: { ...recipe, output: 'png', width: null, height: null }, outputPath: prepared, hardware: ffmpeg.hardware });
+	const pre = buildJob({ source: sourceOf(item, recipe), recipe: { ...recipe, output: 'png', width: null, height: null }, outputPath: prepared, hardware: ffmpeg.hardware });
 	await ffmpeg.run(jobId, pre.args, { duration: 0, cwd, onProgress: () => {} });
 	await upscaler.run(jobId, prepared, enlarged, recipe.upscaleModel, (ratio) => send(ratio * UPSCALE_SHARE));
 	const outputPath = await library.outputPath(id, output.ext, outputDir, ` ×${output.factor}`);
@@ -251,7 +285,7 @@ async function runMatting(jobId, id, recipe, outputDir) {
 	const send = (ratio) => window?.webContents.send('job:progress', jobId, ratio);
 	await library.writeText(id, recipe.text.content);
 	const prepared = join(cwd, 'matting-in.png');
-	const pre = buildJob({ source: sourceOf(item), recipe: { ...recipe, output: 'png' }, outputPath: prepared, hardware: ffmpeg.hardware });
+	const pre = buildJob({ source: sourceOf(item, recipe), recipe: { ...recipe, output: 'png' }, outputPath: prepared, hardware: ffmpeg.hardware });
 	await ffmpeg.run(jobId, pre.args, { duration: 0, cwd, onProgress: () => {} });
 	send(MATTING_PREPARED);
 	const { streams } = await ffmpeg.probe(prepared);
@@ -299,8 +333,10 @@ async function runSequence(jobId, id, recipe, outputDir) {
 	const cwd = await library.workDir(id);
 	await library.writeText(id, recipe.text.content);
 	const pattern = join(folder, `image-%04d.${OUTPUTS[recipe.output].ext}`);
-	const { args, duration } = buildJob({ source: sourceOf(item), recipe, outputPath: pattern, hardware: ffmpeg.hardware });
-	await ffmpeg.run(jobId, args, { duration, cwd, onProgress: (ratio) => window?.webContents.send('job:progress', jobId, ratio) });
+	const send = (ratio) => window?.webContents.send('job:progress', jobId, ratio);
+	const offset = await measurePasses(jobId, item, recipe, OUTPUTS[recipe.output], cwd, send);
+	const { args, duration } = buildJob({ source: sourceOf(item, recipe), recipe, outputPath: pattern, hardware: ffmpeg.hardware });
+	await ffmpeg.run(jobId, args, { duration, cwd, onProgress: (ratio) => send(offset + ratio * (1 - offset)) });
 	return folder;
 }
 
@@ -321,9 +357,11 @@ async function runJob(jobId, id, recipe, outputDir) {
 	}
 	const cwd = await library.workDir(id);
 	await library.writeText(id, merged.text.content);
-	const { args, duration } = buildJob({ source: sourceOf(item), recipe: merged, outputPath, hardware: ffmpeg.hardware });
+	const send = (ratio) => window?.webContents.send('job:progress', jobId, ratio);
 	try {
-		await ffmpeg.run(jobId, args, { duration, cwd, onProgress: (ratio) => window?.webContents.send('job:progress', jobId, ratio) });
+		const offset = await measurePasses(jobId, item, merged, output, cwd, send);
+		const { args, duration } = buildJob({ source: sourceOf(item, merged), recipe: merged, outputPath, hardware: ffmpeg.hardware });
+		await ffmpeg.run(jobId, args, { duration, cwd, onProgress: (ratio) => send(offset + ratio * (1 - offset)) });
 	} catch (error) {
 		await unlink(outputPath).catch(() => {});
 		throw error;
@@ -333,6 +371,22 @@ async function runJob(jobId, id, recipe, outputDir) {
 
 function registerIpc() {
 	ipcMain.handle('app:status', () => status);
+	ipcMain.handle('logo:pick', async () => {
+		const result = await dialog.showOpenDialog(window, {
+			properties: ['openFile'],
+			filters: [{ name: 'Images', extensions: ['png', 'webp', 'jpg', 'jpeg', 'gif', 'bmp'] }],
+		});
+		return result.canceled ? null : logos.register(result.filePaths[0]);
+	});
+	ipcMain.handle('presets:list', () => presets.list());
+	ipcMain.handle('presets:save', (_event, name, recipe) => presets.save(name, recipe));
+	ipcMain.handle('presets:remove', (_event, name) => presets.remove(String(name)));
+	ipcMain.handle('files:initial', () => {
+		const items = pendingOpen;
+		pendingOpen = [];
+		return items;
+	});
+	ipcMain.handle('update:install', () => updater.install());
 	ipcMain.handle('link:download', (_event, jobId, url, mode) => downloadLink(String(jobId), url, mode));
 	ipcMain.handle('link:cancel', (_event, jobId) => ytdlp?.cancel(String(jobId)));
 	ipcMain.handle('link:update', () => ytdlp?.update());
@@ -380,7 +434,7 @@ function registerIpc() {
 		const merged = { ...emptyRecipe(recipe.output), ...recipe };
 		await library.writeText(id, merged.text.content);
 		const cwd = await library.workDir(id);
-		return ffmpeg.frame(buildPreviewArgs(sourceOf(library.get(id)), merged, Number(time) || 0, PREVIEW_MAX_WIDTH), { cwd });
+		return ffmpeg.frame(buildPreviewArgs(sourceOf(library.get(id), merged), merged, Number(time) || 0, PREVIEW_MAX_WIDTH), { cwd });
 	});
 	ipcMain.handle('job:run', (_event, jobId, id, recipe, outputDir) => runJob(jobId, id, recipe, outputDir ?? null));
 	ipcMain.handle('job:cancel', (_event, jobId) => {
@@ -398,10 +452,35 @@ function registerIpc() {
 	});
 }
 
+/** Chemins passés en ligne de commande, sans l'exécutable, les options ni le « . » du lancement en développement. */
+function pathsFromArgv(argv) {
+	return argv.slice(1).filter((arg) => !arg.startsWith('-') && arg !== '.' && existsSync(arg) && arg !== process.execPath);
+}
+
+async function openFromArgv(argv) {
+	const paths = pathsFromArgv(argv);
+	if (!paths.length) return;
+	const items = (await library.add(paths)).map(publicItem);
+	if (!items.length) return;
+	if (window?.webContents && !window.webContents.isLoading()) window.webContents.send('files:opened', items);
+	else pendingOpen.push(...items);
+}
+
+// Une seule fenêtre : les fichiers choisis par « Convertir avec Alambic » rejoignent l'instance déjà ouverte.
+if (!app.requestSingleInstanceLock()) app.quit();
+app.on('second-instance', (_event, argv) => {
+	if (window) {
+		if (window.isMinimized()) window.restore();
+		window.focus();
+	}
+	openFromArgv(argv);
+});
+
 app.whenReady().then(async () => {
 	protocol.handle(MEDIA_SCHEME, serveMedia);
 	await library.init();
 	const [engine, word] = await Promise.all([ffmpeg.init(), isWordAvailable()]);
+	presets = new Presets(join(app.getPath('userData'), 'presets.json'), logos);
 	models = new ModelStore(join(app.getPath('userData'), 'models'));
 	upscaler = new Upscaler(join(app.getPath('userData'), 'tools'));
 	matting = new Matting(join(app.getPath('userData'), 'models'));
@@ -411,6 +490,8 @@ app.whenReady().then(async () => {
 	status = { ffmpeg: engine.ok, ffmpegPath: engine.path ?? null, hardware: engine.hardware ?? {}, word, ytdlp: Boolean(ytdlpFound), ytdlpBundled: ytdlpFound?.bundled ?? false };
 	registerIpc();
 	createWindow();
+	await openFromArgv(process.argv);
+	if (app.isPackaged) updater.start((info) => window?.webContents.send('update:ready', info));
 });
 
 app.on('window-all-closed', async () => {

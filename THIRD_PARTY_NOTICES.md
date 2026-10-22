@@ -9,6 +9,7 @@
 | Electron (Chromium, Node.js) | 44.7.0 | MIT, plus les licences de Chromium listées dans `LICENSES.chromium.html` à côté de l'exécutable | https://github.com/electron/electron |
 | PDF.js (`pdfjs-dist`) | 6.4.299 | Apache-2.0 | https://github.com/mozilla/pdf.js |
 | pdf-lib | 1.17.1 | MIT | https://github.com/Hopding/pdf-lib |
+| electron-updater | 6.8.10 | MIT | https://github.com/electron-userland/electron-builder |
 | ONNX Runtime (`onnxruntime-node`, `onnxruntime-common`) | 1.30.0 | MIT | https://github.com/microsoft/onnxruntime |
 | Recursive (police, via `@fontsource-variable/recursive`) | 5.3.0 | SIL Open Font License 1.1 | https://github.com/arrowtype/recursive |
 

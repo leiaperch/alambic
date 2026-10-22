@@ -41,6 +41,22 @@ contextBridge.exposeInMainWorld('alambic', {
 		ipcRenderer.on('tools:progress', listener);
 		return () => ipcRenderer.removeListener('tools:progress', listener);
 	},
+	pickLogo: () => ipcRenderer.invoke('logo:pick'),
+	listPresets: () => ipcRenderer.invoke('presets:list'),
+	savePreset: (name, recipe) => ipcRenderer.invoke('presets:save', name, recipe),
+	removePreset: (name) => ipcRenderer.invoke('presets:remove', name),
+	initialFiles: () => ipcRenderer.invoke('files:initial'),
+	onOpened: (callback) => {
+		const listener = (_event, items) => callback(items);
+		ipcRenderer.on('files:opened', listener);
+		return () => ipcRenderer.removeListener('files:opened', listener);
+	},
+	installUpdate: () => ipcRenderer.invoke('update:install'),
+	onUpdateReady: (callback) => {
+		const listener = (_event, info) => callback(info);
+		ipcRenderer.on('update:ready', listener);
+		return () => ipcRenderer.removeListener('update:ready', listener);
+	},
 	onProgress: (callback) => {
 		const listener = (_event, jobId, ratio) => callback(jobId, ratio);
 		ipcRenderer.on('job:progress', listener);

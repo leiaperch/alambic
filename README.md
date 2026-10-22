@@ -6,9 +6,11 @@ Alambic est une application Windows pour convertir et retoucher des vidéos, des
 
 ## Installer
 
-1. Télécharger `Alambic Setup x.y.z.exe` dans la page [Releases](https://github.com/leiaperch/alambic/releases).
+1. Télécharger `Alambic-Setup-x.y.z.exe` dans la page [Releases](https://github.com/leiaperch/alambic/releases).
 2. Lancer l'installeur. L'application n'est pas signée, Windows affiche donc « Windows a protégé votre ordinateur » : cliquer sur « Informations complémentaires » puis sur « Exécuter quand même ».
-3. Ouvrir Alambic et glisser des fichiers ou des dossiers dans la fenêtre.
+3. Ouvrir Alambic et glisser des fichiers ou des dossiers dans la fenêtre, ou faire un clic droit sur un fichier dans l'Explorateur puis « Convertir avec Alambic ».
+
+À partir de la version 0.2.0, Alambic télécharge ses mises à jour en arrière-plan et propose de redémarrer pour les installer. La version 0.1.0 n'avait pas cette fonction : il faut installer la 0.2.0 une fois à la main.
 
 Configuration requise : Windows 10 ou 11 en 64 bits. ffmpeg et yt-dlp sont fournis avec l'installeur. Microsoft Word n'est nécessaire que pour convertir des documents DOCX, DOC, ODT ou RTF.
 
@@ -29,7 +31,9 @@ Plusieurs fichiers peuvent recevoir les mêmes réglages en une fois, et des ima
 
 ### Retouche
 
-Le recadrage se fait à la souris ou au clavier, avec des proportions imposées si besoin. On peut aussi tourner, retourner, redimensionner, garder un passage sur la timeline, changer la vitesse, lire à l'envers, faire un boomerang, ajouter des fondus, corriger la luminosité, le contraste, la saturation et la teinte, appliquer un filtre, incruster un texte, couper ou égaliser le son. L'onglet « Rendu » affiche une image calculée par ffmpeg avec tous les réglages, identique au résultat.
+Le recadrage se fait à la souris ou au clavier, avec des proportions imposées si besoin. On peut aussi tourner, retourner, redimensionner, flouter des zones (visage, plaque), poser un logo, garder un passage sur la timeline, changer la vitesse avec un ralenti fluide, stabiliser une vidéo filmée à la main, lire à l'envers, faire un boomerang, ajouter des fondus, corriger la luminosité, le contraste, la saturation et la teinte, appliquer un filtre, incruster un texte, débruiter une voix, couper ou égaliser le son.
+
+Une recette de réglages s'enregistre comme préréglage (« GIF Discord 480p », par exemple) et se réapplique en un choix. L'onglet « Rendu » affiche une image calculée par ffmpeg avec tous les réglages, identique au résultat.
 
 ### Outils repris de sites en ligne
 

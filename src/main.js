@@ -6,7 +6,7 @@ import { Queue } from './ui/queue.js';
 import { Stage } from './ui/stage.js';
 import { Inspector } from './ui/inspector.js';
 import { LinkBar } from './ui/links.js';
-import { icon, ICONS } from './dom.js';
+import { h, icon, ICONS } from './dom.js';
 
 const store = new Store();
 const runner = new Runner(store);
@@ -95,6 +95,15 @@ function bindOutputTarget() {
 	}
 }
 
+/** Bandeau discret : la nouvelle version est téléchargée, l'installer redémarre l'application. */
+function showUpdate(version) {
+	const notice = document.getElementById('update');
+	notice.replaceChildren(
+		h('span', { text: `Alambic ${version} est prêt à être installé.` }),
+		h('button', { type: 'button', class: 'btn btn--small btn--primary', text: 'Redémarrer et installer', on: { click: () => window.alambic.installUpdate() } }));
+	notice.hidden = false;
+}
+
 async function start() {
 	const addButton = document.getElementById('add-files');
 	addButton.append(icon(ICONS.add));
@@ -104,6 +113,8 @@ async function start() {
 	store.addEventListener('change', renderDock);
 	bindDrop();
 	bindOutputTarget();
+	window.alambic.onOpened((items) => runner.ingest(items));
+	window.alambic.onUpdateReady(({ version }) => showUpdate(version));
 	store.status = await window.alambic.status();
 	engine.textContent = describeEngine(store.status);
 	if (!store.status.ffmpeg) {
@@ -112,6 +123,8 @@ async function start() {
 	}
 	if (!store.status.ytdlp) links.disable('yt-dlp est introuvable : installe-le avec « winget install yt-dlp.yt-dlp » puis relance Alambic.');
 	queue.render();
+	const opened = await window.alambic.initialFiles();
+	if (opened.length) runner.ingest(opened);
 	store.dispatchEvent(new CustomEvent('change', { detail: { reason: 'init' } }));
 }
 

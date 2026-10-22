@@ -1,5 +1,5 @@
 import { h, icon, ICONS } from '../dom.js';
-import { KIND, OUTPUTS, QUALITY, FILTERS, TEXT_POSITIONS, DISCORD_PRESET, SUB_LANGUAGES, SUB_MODELS, UPSCALE_STYLES, outputsFor } from '../../shared/formats.js';
+import { KIND, OUTPUTS, QUALITY, FILTERS, TEXT_POSITIONS, DISCORD_PRESET, SUB_LANGUAGES, SUB_MODELS, UPSCALE_STYLES, DENOISE_LEVELS, LOGO_POSITIONS, outputsFor } from '../../shared/formats.js';
 import { Models, modelPanel } from './models.js';
 import { STATUS } from '../store.js';
 import {
@@ -42,21 +42,28 @@ export class Inspector {
 	#root = document.getElementById('inspector');
 	#bindings = [];
 	#builtFor = null;
-	#openSections = new Set(['Sortie', 'Sous-titres', 'Agrandissement', 'Détourage', 'Séparation', 'Cadre', 'Temps', 'Pages']);
+	#openSections = new Set(['Sortie', 'Sous-titres', 'Agrandissement', 'Détourage', 'Séparation', 'Cadre', 'Temps', 'Pages', 'Logo']);
 	#footer = null;
 	#models = new Models();
 	#disposers = [];
+	#presets = [];
 
 	constructor(store, runner) {
 		this.#store = store;
 		this.#runner = runner;
+		window.alambic.listPresets().then((list) => {
+			this.#presets = list;
+			this.#builtFor = null;
+			this.#onChange({ reason: 'presets' });
+		});
 		store.addEventListener('change', (event) => this.#onChange(event.detail));
 	}
 
 	#onChange({ id, reason }) {
 		const active = this.#store.active;
-		const key = active ? `${active.id}|${active.recipe.output}|${active.status === STATUS.ANALYZING}` : null;
-		if (key !== this.#builtFor || reason === 'analyzed') {
+		// Le nombre de zones floutées et le logo changent la structure du panneau : ils font partie de la clé.
+		const key = active ? `${active.id}|${active.recipe.output}|${active.status === STATUS.ANALYZING}|${active.recipe.blurZones?.length ?? 0}|${active.recipe.logo?.id ?? ''}` : null;
+		if (key !== this.#builtFor || reason === 'analyzed' || reason === 'preset' || reason === 'zones') {
 			this.#builtFor = key;
 			this.#build(active);
 			return;
@@ -81,7 +88,7 @@ export class Inspector {
 		if (isVisual) sections.push(this.#frameSection(entry));
 		if ([KIND.VIDEO, KIND.AUDIO, KIND.ANIMATED].includes(kind) && entry.info?.duration) sections.push(this.#timeSection(entry, output));
 		if ((kind === KIND.VIDEO || kind === KIND.ANIMATED || kind === KIND.AUDIO) && !output.still) sections.push(this.#motionSection(entry, output));
-		if (isVisual) sections.push(this.#colorSection(), this.#textSection());
+		if (isVisual) sections.push(this.#colorSection(), this.#textSection(), this.#logoSection(entry));
 		const audioOut = output.audio || output.audioOnly || output.engine === 'stems';
 		if ((kind === KIND.VIDEO && entry.info?.hasAudio && audioOut) || (kind === KIND.AUDIO && output.engine !== 'whisper')) sections.push(this.#audioSection(kind, output));
 		if (entry.item.ext === 'pdf' && output.engine === 'pdf') sections.push(this.#pagesSection(entry));
@@ -128,7 +135,7 @@ export class Inspector {
 			.map(([label, test]) => ({ label, options: available.filter(test).map((o) => ({ value: o.id, label: o.label })) }))
 			.filter((group) => group.options.length);
 		const id = entry.recipe.output;
-		const children = [];
+		const children = [this.#presetBlock(entry)];
 		if (kind === KIND.VIDEO || kind === KIND.ANIMATED) {
 			children.push(h('button', { type: 'button', class: 'btn btn--small preset', on: { click: () => this.#applyDiscord() } },
 				'Compresser pour Discord', h('span', { class: 'preset__hint', text: `MP4 sous ${Math.ceil(DISCORD_PRESET.targetSizeMb)} Mo` })));
@@ -192,7 +199,8 @@ export class Inspector {
 			h('div', { class: 'grid-2' },
 				this.#bind(numberControl('Largeur finale', { min: 1, max: MAX_DIMENSION, unit: 'px', nullable: true, placeholder: 'auto' }, (value) => this.#set('width', value)), 'width'),
 				this.#bind(numberControl('Hauteur finale', { min: 1, max: MAX_DIMENSION, unit: 'px', nullable: true, placeholder: 'auto' }, (value) => this.#set('height', value)), 'height')),
-			h('p', { class: 'field__hint', text: 'Une seule dimension remplie garde les proportions.' }));
+			h('p', { class: 'field__hint', text: 'Une seule dimension remplie garde les proportions.' }),
+			...this.#blurControls(entry));
 	}
 
 	#setCropField(key, value) {
@@ -249,11 +257,126 @@ export class Inspector {
 			this.#bind(toggleControl('Lire à l’envers', (value) => this.#set('reverse', value)), 'reverse'),
 		];
 		if (visualMotion) children.push(this.#bind(toggleControl('Boomerang', (value) => this.#set('boomerang', value), 'Aller puis retour, sans le son.'), 'boomerang'));
+		if (visualMotion) {
+			children.push(this.#bind(toggleControl('Ralenti fluide', (value) => this.#set('smoothMotion', value), 'Invente les images manquantes quand la vitesse est sous × 1. Lent à calculer.'), 'smoothMotion'));
+		}
+		if ((visualMotion || output.sequence || output.sprite) && entry.item.kind === KIND.VIDEO) {
+			children.push(this.#bind(toggleControl('Stabiliser', (value) => this.#set('stabilize', value), 'Atténue les tremblements d’une vidéo filmée à la main. Double le temps de calcul.'), 'stabilize'));
+		}
 		if (visualMotion || output.sequence || output.sprite) {
 			const hint = output.sequence ? 'Vide : toutes les images de la source.' : null;
 			children.push(this.#bind(numberControl('Images par seconde', { min: 0.1, max: MAX_FPS, step: 0.1, nullable: true, placeholder: 'auto', hint }, (value) => this.#set('fps', value)), 'fps'));
 		}
 		return this.#section('Mouvement', children);
+	}
+
+	/** Outil de la souris, zones existantes et ajout au clavier d'une zone saisie en pixels de la source. */
+	#blurControls(entry) {
+		const tool = segmentedControl('Outil sur l’aperçu', [{ value: 'crop', label: 'Recadrer' }, { value: 'blur', label: 'Flouter une zone' }], (value) => this.#store.setUi({ stageTool: value }));
+		this.#bindings.push({ control: tool, read: () => this.#store.stageTool });
+		const zones = entry.recipe.blurZones ?? [];
+		const { width = 0, height = 0 } = entry.info ?? {};
+		const fields = ['x', 'y', 'w', 'h'].map((key) => numberControl(
+			{ x: 'Zone X', y: 'Zone Y', w: 'Zone largeur', h: 'Zone hauteur' }[key],
+			{ min: 0, max: key === 'x' || key === 'w' ? width : height, unit: 'px' }, () => {}));
+		const defaults = { x: Math.round(width * 0.4), y: Math.round(height * 0.4), w: Math.round(width * 0.2), h: Math.round(height * 0.2) };
+		fields.forEach((field, index) => field.sync(Object.values(defaults)[index]));
+		const add = h('button', { type: 'button', class: 'btn btn--small', text: 'Ajouter cette zone' });
+		add.addEventListener('click', () => {
+			const [x, y, w, hgt] = fields.map((field) => Number(field.element.querySelector('input').value));
+			if (w > 0 && hgt > 0) this.#setZones([...zones, { x, y, w, h: hgt }]);
+		});
+		const list = zones.map((_, index) => h('button', {
+			type: 'button', class: 'btn btn--small', 'aria-label': `Retirer la zone ${index + 1}`,
+			on: { click: () => this.#setZones(zones.filter((__, i) => i !== index)) },
+		}, icon(ICONS.close), `Zone ${index + 1}`));
+		return [
+			tool.element,
+			list.length ? h('div', { class: 'zone-list' }, list) : h('p', { class: 'field__hint', text: 'Aucune zone floutée. Choisis « Flouter une zone » puis glisse sur l’aperçu.' }),
+			this.#bind(sliderControl('Intensité du flou', { min: 4, max: 60, step: 1, neutral: 20, format: (v) => `${v} px` }, (value) => this.#set('blurStrength', value)), 'blurStrength'),
+			h('details', { class: 'section__sub' }, h('summary', { text: 'Ajouter une zone au clavier' }),
+				h('div', { class: 'grid-2' }, fields.map((field) => field.element)), add),
+		];
+	}
+
+	#setZones(zones) {
+		const active = this.#store.active;
+		if (!active) return;
+		this.#store.setRecipe(active.id, 'blurZones', zones);
+		this.#onChange({ id: active.id, reason: 'zones' });
+	}
+
+	#logoSection(entry) {
+		const { logo } = entry.recipe;
+		const pick = h('button', { type: 'button', class: 'btn btn--small', text: logo.id ? 'Changer' : 'Choisir une image…' });
+		pick.addEventListener('click', async () => {
+			pick.disabled = true;
+			try {
+				const chosen = await window.alambic.pickLogo();
+				if (chosen) {
+					this.#set('logo', { ...this.#store.active.recipe.logo, ...chosen });
+					this.#builtFor = null;
+					this.#onChange({ reason: 'zones' });
+				}
+			} finally {
+				pick.disabled = false;
+			}
+		});
+		const remove = logo.id ? h('button', { type: 'button', class: 'btn btn--small btn--ghost', text: 'Retirer', on: { click: () => {
+			this.#set('logo', { ...logo, id: null, name: '' });
+			this.#onChange({ reason: 'zones' });
+		} } }) : null;
+		const children = [
+			h('div', { class: 'logo-pick' }, h('span', { class: 'logo-pick__name', text: logo.id ? logo.name : 'Aucun logo' }), pick, remove),
+		];
+		if (logo.id) {
+			children.push(
+				this.#bind(selectControl('Position', [{ options: LOGO_POSITIONS.map((p) => ({ value: p.id, label: p.label })) }], (value) => this.#set('logo.position', value)), 'logo.position'),
+				this.#bind(sliderControl('Taille', { min: 3, max: 50, step: 1, neutral: 15, format: (v) => `${v} % de la largeur` }, (value) => this.#set('logo.size', value)), 'logo.size'),
+				this.#bind(sliderControl('Opacité', { min: 0.1, max: 1, step: 0.05, neutral: 0.85, format: (v) => `${Math.round(v * PERCENT)} %` }, (value) => this.#set('logo.opacity', value)), 'logo.opacity'));
+		}
+		return this.#section('Logo', children);
+	}
+
+	/** Préréglages enregistrés : appliquer d'un choix, enregistrer la recette courante sous un nom, supprimer. */
+	#presetBlock(entry) {
+		const select = h('select', { class: 'input', id: 'preset-select', 'aria-label': 'Préréglage' },
+			h('option', { value: '', text: this.#presets.length ? 'Appliquer un préréglage…' : 'Aucun préréglage enregistré' }),
+			this.#presets.map((preset) => h('option', { value: preset.name, text: preset.name })));
+		select.addEventListener('change', () => {
+			const preset = this.#presets.find((p) => p.name === select.value);
+			if (preset) this.#store.applyPreset(entry.id, preset.recipe);
+		});
+		const name = h('input', { class: 'input', type: 'text', id: 'preset-name', placeholder: 'Nom (ex. GIF Discord 480p)', maxlength: '60' });
+		const save = h('button', { type: 'button', class: 'btn btn--small', text: 'Enregistrer' });
+		const report = h('p', { class: 'field__hint', role: 'status' });
+		save.addEventListener('click', async () => {
+			save.disabled = true;
+			try {
+				this.#presets = await window.alambic.savePreset(name.value, this.#store.active.recipe);
+				report.textContent = `« ${name.value.trim()} » enregistré.`;
+				this.#builtFor = null;
+				this.#onChange({ reason: 'presets' });
+			} catch (error) {
+				report.textContent = error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+			} finally {
+				save.disabled = false;
+			}
+		});
+		const remove = h('button', { type: 'button', class: 'btn btn--small btn--ghost', text: 'Supprimer le préréglage choisi' });
+		remove.addEventListener('click', async () => {
+			if (!select.value) return;
+			this.#presets = await window.alambic.removePreset(select.value);
+			this.#builtFor = null;
+			this.#onChange({ reason: 'presets' });
+		});
+		return h('div', { class: 'presets' },
+			h('label', { class: 'field__label', for: 'preset-select', text: 'Mes préréglages' }),
+			select,
+			h('label', { class: 'visually-hidden', for: 'preset-name', text: 'Nom du nouveau préréglage' }),
+			h('div', { class: 'presets__row' }, name, save),
+			this.#presets.length ? remove : null,
+			report);
 	}
 
 	#colorSection() {
@@ -277,7 +400,8 @@ export class Inspector {
 	}
 
 	#audioSection(kind, output) {
-		const children = [];
+		const children = [this.#bind(segmentedControl('Débruiter la voix', DENOISE_LEVELS.map((d) => ({ value: d.id, label: d.label })), (value) => this.#set('denoise', value)), 'denoise'),
+			h('p', { class: 'field__hint', text: 'Retire le souffle, le ronflement et le bruit de fond, mesuré sur le fichier.' })];
 		if (kind === KIND.VIDEO && !output.audioOnly) children.push(this.#bind(toggleControl('Couper le son', (value) => this.#set('mute', value)), 'mute'));
 		children.push(this.#bind(toggleControl('Égaliser le volume', (value) => this.#set('normalize', value), 'Norme EBU R128 à -16 LUFS, comme les plateformes de streaming.'), 'normalize'));
 		children.push(this.#bind(sliderControl('Volume', { min: 0, max: 2, step: 0.05, neutral: 1, format: (v) => `${Math.round(v * PERCENT)} %` }, (value) => this.#set('volume', value)), 'volume'));
