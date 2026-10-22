@@ -1,5 +1,5 @@
 import { Worker } from 'node:worker_threads';
-import { access, mkdir } from 'node:fs/promises';
+import { access, mkdir, rm } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { downloadFile } from './download.js';
@@ -60,7 +60,13 @@ export class Stems {
 				if (message.progress !== undefined) onProgress(message.progress);
 				if (message.done) resolve();
 				if (message.cancelled) reject(new Error('Annulé'));
-				if (message.error) reject(new Error(`Séparation impossible : ${message.error}`));
+				if (message.error && /protobuf|Load model|ONNX|INVALID_GRAPH|invalid model/i.test(message.error)) {
+					rm(this.#path, { force: true }).finally(() => reject(new Error('Le modèle de séparation était abîmé et a été supprimé. Télécharge-le à nouveau dans la section Séparation.')));
+				} else if (message.error) {
+					reject(new Error(/memory|alloc/i.test(message.error)
+						? 'Mémoire insuffisante pour séparer un morceau aussi long. Découpe-le dans le temps (section Temps) puis réessaie.'
+						: `Séparation impossible : ${message.error}`));
+				}
 			});
 			job.worker.on('error', reject);
 			job.worker.on('exit', () => this.#workers.delete(jobId));

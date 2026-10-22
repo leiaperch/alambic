@@ -18,6 +18,16 @@ export const NATIVE_FACTOR = 4;
 const UNZIP_TIMEOUT_MS = 120_000;
 const PERCENT = 100;
 
+/** Real-ESRGAN tourne sur Vulkan : sans pilote graphique compatible, il échoue dès l'initialisation. */
+function explainUpscale(log, code) {
+	if (/vkCreateInstance|vulkan|invalid gpu device|no gpu/i.test(log)) {
+		return 'Real-ESRGAN demande une carte graphique compatible Vulkan. Mets à jour le pilote graphique, ou cet outil ne fonctionnera pas sur ce poste.';
+	}
+	if (/decode image .* failed|read .* failed|unsupported image/i.test(log)) return 'Real-ESRGAN n’arrive pas à lire cette image.';
+	if (/out of memory|vkAllocateMemory/i.test(log)) return 'Mémoire graphique insuffisante pour une image aussi grande. Réduis-la d’abord (Largeur finale) puis réessaie.';
+	return `Real-ESRGAN a échoué (code ${code}).`;
+}
+
 export class Upscaler {
 	#dir;
 	#jobs = new Map();
@@ -81,7 +91,7 @@ export class Upscaler {
 				this.#jobs.delete(jobId);
 				if (child.killed) reject(new Error('Annulé'));
 				else if (code === 0) resolve();
-				else reject(new Error(`Real-ESRGAN a échoué (code ${code}). ${log.trim().split('\n').pop() ?? ''}`));
+				else reject(new Error(explainUpscale(log, code)));
 			});
 		});
 	}

@@ -5,6 +5,7 @@ import { convertPdf, imagesToPdf, mergePdfs, pdfThumb } from './engines/pdf.js';
 
 const CONCURRENCY = 2;
 const THUMB_SIZE = 96;
+const CANCELLED = 'Annulé';
 
 const pngUrl = (bytes) => URL.createObjectURL(new Blob([bytes], { type: 'image/png' }));
 
@@ -43,9 +44,15 @@ export class Runner {
 			if (reclassified || !outputsFor(item.kind, item.ext).includes(entry.recipe.output)) entry.recipe.output = defaultOutputFor(item.kind, item.ext);
 			entry.item = item;
 			store.update(id, { info: item.info, status: STATUS.READY, progress: 0 }, 'analyzed');
-			store.update(id, { thumbUrl: await this.#thumb(item) }, 'thumb');
 		} catch (error) {
-			store.update(id, { status: STATUS.ERROR, error: `Lecture impossible : ${error.message}` });
+			store.update(id, { status: STATUS.ERROR, error: `Lecture impossible. ${error.message}` });
+			return;
+		}
+		// Une vignette ratée n'empêche pas de convertir : la file affiche l'extension à la place.
+		try {
+			store.update(id, { thumbUrl: await this.#thumb(store.get(id).item) }, 'thumb');
+		} catch {
+			// vignette absente
 		}
 	}
 
@@ -96,7 +103,8 @@ export class Runner {
 			const outputs = await this.#dispatch(entry, options);
 			store.update(id, { status: STATUS.DONE, progress: 1, outputs }, 'status');
 		} catch (error) {
-			store.update(id, { status: STATUS.ERROR, error: error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') }, 'status');
+			if (error.message === CANCELLED) store.update(id, { status: STATUS.READY, progress: 0, error: null }, 'status');
+			else store.update(id, { status: STATUS.ERROR, error: error.message }, 'status');
 		}
 	}
 

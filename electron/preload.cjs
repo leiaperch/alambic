@@ -1,57 +1,63 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
+/** Electron préfixe les erreurs IPC (« Error invoking remote method … ») : l'interface ne reçoit que le message. */
+const REMOTE_PREFIX = /^Error invoking remote method '[^']+': (Error: )?/;
+const call = (channel, ...args) => ipcRenderer.invoke(channel, ...args).catch((error) => {
+	throw new Error(String(error.message ?? error).replace(REMOTE_PREFIX, ''));
+});
+
 contextBridge.exposeInMainWorld('alambic', {
-	status: () => ipcRenderer.invoke('app:status'),
-	pickFiles: () => ipcRenderer.invoke('files:pick'),
-	addFiles: (files) => ipcRenderer.invoke('files:add', files.map((file) => webUtils.getPathForFile(file)).filter(Boolean)),
-	removeFile: (id) => ipcRenderer.invoke('files:remove', id),
-	pickFolder: () => ipcRenderer.invoke('folder:pick'),
-	analyze: (id) => ipcRenderer.invoke('media:analyze', id),
-	decodeFrame: (id, index, bytes) => ipcRenderer.invoke('media:decode-frame', id, index, bytes),
-	decodeFinish: (id, durations) => ipcRenderer.invoke('media:decode-finish', id, durations),
-	raster: (id, bytes) => ipcRenderer.invoke('media:raster', id, bytes),
-	thumb: (id) => ipcRenderer.invoke('media:thumb', id),
-	waveform: (id, color) => ipcRenderer.invoke('media:waveform', id, color),
-	preview: (id, recipe, time) => ipcRenderer.invoke('media:preview', id, recipe, time),
-	run: (jobId, id, recipe, outputDir) => ipcRenderer.invoke('job:run', jobId, id, recipe, outputDir),
-	cancel: (jobId) => ipcRenderer.invoke('job:cancel', jobId),
-	save: (id, ext, bytes, outputDir, suffix) => ipcRenderer.invoke('file:save', id, ext, bytes, outputDir, suffix),
-	reveal: (path) => ipcRenderer.invoke('shell:reveal', path),
-	download: (jobId, url, mode) => ipcRenderer.invoke('link:download', jobId, url, mode),
-	cancelDownload: (jobId) => ipcRenderer.invoke('link:cancel', jobId),
-	updateYtdlp: () => ipcRenderer.invoke('link:update'),
+	status: () => call('app:status'),
+	pickFiles: () => call('files:pick'),
+	addFiles: (files) => call('files:add', files.map((file) => webUtils.getPathForFile(file)).filter(Boolean)),
+	removeFile: (id) => call('files:remove', id),
+	pickFolder: () => call('folder:pick'),
+	analyze: (id) => call('media:analyze', id),
+	decodeFrame: (id, index, bytes) => call('media:decode-frame', id, index, bytes),
+	decodeFinish: (id, durations) => call('media:decode-finish', id, durations),
+	raster: (id, bytes) => call('media:raster', id, bytes),
+	thumb: (id) => call('media:thumb', id),
+	waveform: (id, color) => call('media:waveform', id, color),
+	preview: (id, recipe, time) => call('media:preview', id, recipe, time),
+	run: (jobId, id, recipe, outputDir) => call('job:run', jobId, id, recipe, outputDir),
+	cancel: (jobId) => call('job:cancel', jobId),
+	save: (id, ext, bytes, outputDir, suffix) => call('file:save', id, ext, bytes, outputDir, suffix),
+	reveal: (path) => call('shell:reveal', path),
+	download: (jobId, url, mode) => call('link:download', jobId, url, mode),
+	cancelDownload: (jobId) => call('link:cancel', jobId),
+	updateYtdlp: () => call('link:update'),
 	onDownload: (callback) => {
 		const listener = (_event, jobId, payload) => callback(jobId, payload);
 		ipcRenderer.on('link:progress', listener);
 		return () => ipcRenderer.removeListener('link:progress', listener);
 	},
-	modelStatus: () => ipcRenderer.invoke('models:status'),
-	downloadModel: (name) => ipcRenderer.invoke('models:download', name),
-	cancelModel: (name) => ipcRenderer.invoke('models:cancel', name),
+	modelStatus: () => call('models:status'),
+	downloadModel: (name) => call('models:download', name),
+	cancelModel: (name) => call('models:cancel', name),
 	onModelProgress: (callback) => {
 		const listener = (_event, name, ratio) => callback(name, ratio);
 		ipcRenderer.on('models:progress', listener);
 		return () => ipcRenderer.removeListener('models:progress', listener);
 	},
-	toolStatus: () => ipcRenderer.invoke('tools:status'),
-	installTool: (name) => ipcRenderer.invoke('tools:install', name),
-	cancelTool: (name) => ipcRenderer.invoke('tools:cancel', name),
+	toolStatus: () => call('tools:status'),
+	installTool: (name) => call('tools:install', name),
+	cancelTool: (name) => call('tools:cancel', name),
 	onToolProgress: (callback) => {
 		const listener = (_event, name, ratio) => callback(name, ratio);
 		ipcRenderer.on('tools:progress', listener);
 		return () => ipcRenderer.removeListener('tools:progress', listener);
 	},
-	pickLogo: () => ipcRenderer.invoke('logo:pick'),
-	listPresets: () => ipcRenderer.invoke('presets:list'),
-	savePreset: (name, recipe) => ipcRenderer.invoke('presets:save', name, recipe),
-	removePreset: (name) => ipcRenderer.invoke('presets:remove', name),
-	initialFiles: () => ipcRenderer.invoke('files:initial'),
+	pickLogo: () => call('logo:pick'),
+	listPresets: () => call('presets:list'),
+	savePreset: (name, recipe) => call('presets:save', name, recipe),
+	removePreset: (name) => call('presets:remove', name),
+	initialFiles: () => call('files:initial'),
 	onOpened: (callback) => {
 		const listener = (_event, items) => callback(items);
 		ipcRenderer.on('files:opened', listener);
 		return () => ipcRenderer.removeListener('files:opened', listener);
 	},
-	installUpdate: () => ipcRenderer.invoke('update:install'),
+	installUpdate: () => call('update:install'),
 	onUpdateReady: (callback) => {
 		const listener = (_event, info) => callback(info);
 		ipcRenderer.on('update:ready', listener);

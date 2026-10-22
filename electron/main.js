@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog, protocol, shell, nativeTheme } from 'electron';
 import { createReadStream, existsSync } from 'node:fs';
-import { stat, writeFile, readFile, unlink, mkdir } from 'node:fs/promises';
+import { stat, writeFile, readFile, unlink, mkdir, access } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,7 @@ import { Library, isAnimatedWebp, summarize } from './library.js';
 import { buildJob, buildPreviewArgs, buildThumbArgs, buildStabilizeArgs, buildNoiseFloorArgs, parseNoiseFloor } from './recipe.js';
 import { Logos, Presets } from './presets.js';
 import { Updater } from './updater.js';
+import { explain } from './errors.js';
 import { isWordAvailable, convertWithWord } from './office.js';
 import { Ytdlp, locateYtdlp, validateUrl, buildDownloadArgs, LINK_MODES } from './ytdlp.js';
 import { ModelStore, MODELS, buildWhisperArgs, filterPath, tidySrt, srtToText } from './whisper.js';
@@ -237,8 +238,9 @@ async function runWhisper(jobId, id, recipe, outputDir) {
 	const source = sourceOf(item, recipe);
 	const spoken = recipe.trim ? recipe.trim.end - recipe.trim.start : source.duration ?? 0;
 	await ffmpeg.run(jobId, args, { duration: spoken, cwd, onProgress: progress(0) });
-	const srt = tidySrt(await readFile(join(cwd, 'whisper.srt'), 'utf8'));
-	if (!srt.trim()) throw new Error('Aucune parole reconnue dans ce passage.');
+	const raw = await readFile(join(cwd, 'whisper.srt'), 'utf8').catch(() => '');
+	const srt = tidySrt(raw);
+	if (!srt.trim()) throw new Error('Aucune parole reconnue dans ce passage. Vérifie la langue choisie, ou essaie le modèle « Précis ».');
 	if (!output.burn) {
 		const outputPath = await library.outputPath(id, output.ext, outputDir);
 		await writeFile(outputPath, recipe.output === 'subs-txt' ? srtToText(srt) : srt, 'utf8');
@@ -340,11 +342,30 @@ async function runSequence(jobId, id, recipe, outputDir) {
 	return folder;
 }
 
+/**
+ * Vérifications avant de lancer un moteur : source toujours présente, logo toujours là,
+ * piste audio pour les sorties qui en ont besoin.
+ */
+async function preflight(item, recipe, output) {
+	if (!(await access(item.path).then(() => true, () => false))) {
+		throw new Error(`« ${item.name} » a été déplacé, renommé ou supprimé depuis son ajout. Retire-le de la liste et ajoute-le à nouveau.`);
+	}
+	if (recipe.logo?.id) {
+		const logoPath = logos.path(recipe.logo.id);
+		if (!logoPath || !(await access(logoPath).then(() => true, () => false))) {
+			throw new Error('Le logo choisi a été déplacé ou supprimé. Choisis-le à nouveau dans la section Logo.');
+		}
+	}
+	const needsAudio = output.audioOnly || output.engine === 'whisper' || output.engine === 'stems';
+	if (needsAudio && item.info && !item.info.hasAudio) throw new Error(`« ${item.name} » n’a pas de piste audio : rien à extraire, transcrire ou séparer.`);
+}
+
 async function runJob(jobId, id, recipe, outputDir) {
 	const item = library.get(id);
 	const output = OUTPUTS[recipe.output];
 	if (!output) throw new Error('Format de sortie inconnu');
 	const merged = { ...emptyRecipe(recipe.output), ...recipe };
+	await preflight(item, merged, output);
 	if (output.sequence) return runSequence(jobId, id, merged, outputDir);
 	if (output.engine === 'whisper') return runWhisper(jobId, id, merged, outputDir);
 	if (output.engine === 'upscale') return runUpscale(jobId, id, merged, outputDir);
@@ -369,85 +390,96 @@ async function runJob(jobId, id, recipe, outputDir) {
 	return outputPath;
 }
 
+/** Toute erreur renvoyée à l'interface passe par explain() : message français, jamais un code système brut. */
+function handle(channel, fn) {
+	ipcMain.handle(channel, async (...args) => {
+		try {
+			return await fn(...args);
+		} catch (error) {
+			throw new Error(explain(error));
+		}
+	});
+}
+
 function registerIpc() {
-	ipcMain.handle('app:status', () => status);
-	ipcMain.handle('logo:pick', async () => {
+	handle('app:status', () => status);
+	handle('logo:pick', async () => {
 		const result = await dialog.showOpenDialog(window, {
 			properties: ['openFile'],
 			filters: [{ name: 'Images', extensions: ['png', 'webp', 'jpg', 'jpeg', 'gif', 'bmp'] }],
 		});
 		return result.canceled ? null : logos.register(result.filePaths[0]);
 	});
-	ipcMain.handle('presets:list', () => presets.list());
-	ipcMain.handle('presets:save', (_event, name, recipe) => presets.save(name, recipe));
-	ipcMain.handle('presets:remove', (_event, name) => presets.remove(String(name)));
-	ipcMain.handle('files:initial', () => {
+	handle('presets:list', () => presets.list());
+	handle('presets:save', (_event, name, recipe) => presets.save(name, recipe));
+	handle('presets:remove', (_event, name) => presets.remove(String(name)));
+	handle('files:initial', () => {
 		const items = pendingOpen;
 		pendingOpen = [];
 		return items;
 	});
-	ipcMain.handle('update:install', () => updater.install());
-	ipcMain.handle('link:download', (_event, jobId, url, mode) => downloadLink(String(jobId), url, mode));
-	ipcMain.handle('link:cancel', (_event, jobId) => ytdlp?.cancel(String(jobId)));
-	ipcMain.handle('link:update', () => ytdlp?.update());
-	ipcMain.handle('models:status', () => models.status());
-	ipcMain.handle('models:download', async (_event, name) => {
+	handle('update:install', () => updater.install());
+	handle('link:download', (_event, jobId, url, mode) => downloadLink(String(jobId), url, mode));
+	handle('link:cancel', (_event, jobId) => ytdlp?.cancel(String(jobId)));
+	handle('link:update', () => ytdlp?.update());
+	handle('models:status', () => models.status());
+	handle('models:download', async (_event, name) => {
 		if (name !== 'base' && name !== 'turbo') throw new Error('Modèle inconnu');
 		if (!(await models.has('vad'))) await models.download('vad', () => {});
 		await models.download(name, (ratio) => window?.webContents.send('models:progress', name, ratio));
 		return models.status();
 	});
-	ipcMain.handle('models:cancel', (_event, name) => models.cancel(String(name)));
-	ipcMain.handle('tools:status', async () => ({ upscale: await upscaler.installed(), matting: await matting.installed(), stems: await stems.installed() }));
-	ipcMain.handle('tools:install', async (_event, name) => {
+	handle('models:cancel', (_event, name) => models.cancel(String(name)));
+	handle('tools:status', async () => ({ upscale: await upscaler.installed(), matting: await matting.installed(), stems: await stems.installed() }));
+	handle('tools:install', async (_event, name) => {
 		const tool = { upscale: upscaler, matting, stems }[name];
 		if (!tool) throw new Error('Outil inconnu');
 		await tool.install((ratio) => window?.webContents.send('tools:progress', name, ratio));
 		return { [name]: true };
 	});
-	ipcMain.handle('tools:cancel', (_event, name) => ({ upscale: upscaler, matting, stems })[name]?.cancelInstall());
-	ipcMain.handle('files:pick', async () => {
+	handle('tools:cancel', (_event, name) => ({ upscale: upscaler, matting, stems })[name]?.cancelInstall());
+	handle('files:pick', async () => {
 		const result = await dialog.showOpenDialog(window, { properties: ['openFile', 'multiSelections'] });
 		return result.canceled ? [] : (await library.add(result.filePaths)).map(publicItem);
 	});
-	ipcMain.handle('files:add', async (_event, paths) => {
+	handle('files:add', async (_event, paths) => {
 		if (!Array.isArray(paths) || !paths.every((p) => typeof p === 'string')) throw new Error('Chemins invalides');
 		return (await library.add(paths)).map(publicItem);
 	});
-	ipcMain.handle('files:remove', (_event, id) => library.remove(id));
-	ipcMain.handle('folder:pick', async () => {
+	handle('files:remove', (_event, id) => library.remove(id));
+	handle('folder:pick', async () => {
 		const result = await dialog.showOpenDialog(window, { properties: ['openDirectory', 'createDirectory'] });
 		return result.canceled ? null : result.filePaths[0];
 	});
-	ipcMain.handle('media:analyze', (_event, id) => analyze(id));
-	ipcMain.handle('media:decode-frame', async (_event, id, index, bytes) => {
+	handle('media:analyze', (_event, id) => analyze(id));
+	handle('media:decode-frame', async (_event, id, index, bytes) => {
 		await writeFile(join(await library.workDir(id), `frame-${Number(index)}.png`), Buffer.from(bytes));
 	});
-	ipcMain.handle('media:decode-finish', (_event, id, durations) => finishDecode(id, durations.map(Number)));
-	ipcMain.handle('media:raster', (_event, id, bytes) => finishRaster(id, bytes));
-	ipcMain.handle('media:thumb', async (_event, id) => ffmpeg.frame(buildThumbArgs(sourceOf(library.get(id)), THUMB_SIZE)));
-	ipcMain.handle('media:waveform', async (_event, id, color) => {
+	handle('media:decode-finish', (_event, id, durations) => finishDecode(id, durations.map(Number)));
+	handle('media:raster', (_event, id, bytes) => finishRaster(id, bytes));
+	handle('media:thumb', async (_event, id) => ffmpeg.frame(buildThumbArgs(sourceOf(library.get(id)), THUMB_SIZE)));
+	handle('media:waveform', async (_event, id, color) => {
 		if (!/^#[0-9a-f]{6}$/i.test(color)) throw new Error('Couleur invalide');
 		return ffmpeg.frame(['-i', library.get(id).source, '-filter_complex', `aformat=channel_layouts=mono,showwavespic=s=${WAVEFORM_SIZE}:colors=${color}`]);
 	});
-	ipcMain.handle('media:preview', async (_event, id, recipe, time) => {
+	handle('media:preview', async (_event, id, recipe, time) => {
 		const merged = { ...emptyRecipe(recipe.output), ...recipe };
 		await library.writeText(id, merged.text.content);
 		const cwd = await library.workDir(id);
 		return ffmpeg.frame(buildPreviewArgs(sourceOf(library.get(id), merged), merged, Number(time) || 0, PREVIEW_MAX_WIDTH), { cwd });
 	});
-	ipcMain.handle('job:run', (_event, jobId, id, recipe, outputDir) => runJob(jobId, id, recipe, outputDir ?? null));
-	ipcMain.handle('job:cancel', (_event, jobId) => {
+	handle('job:run', (_event, jobId, id, recipe, outputDir) => runJob(jobId, id, recipe, outputDir ?? null));
+	handle('job:cancel', (_event, jobId) => {
 		ffmpeg.cancel(jobId);
 		upscaler.cancel(jobId);
 		stems.cancel(jobId);
 	});
-	ipcMain.handle('file:save', async (_event, id, ext, bytes, outputDir, suffix) => {
+	handle('file:save', async (_event, id, ext, bytes, outputDir, suffix) => {
 		const path = await library.outputPath(id, String(ext), outputDir ?? null, suffix ? String(suffix) : '');
 		await writeFile(path, Buffer.from(bytes));
 		return path;
 	});
-	ipcMain.handle('shell:reveal', (_event, path) => {
+	handle('shell:reveal', (_event, path) => {
 		if (typeof path === 'string') shell.showItemInFolder(path);
 	});
 }

@@ -19,6 +19,24 @@ const FORMATS = {
 
 export const LINK_MODES = Object.freeze(Object.keys(FORMATS));
 
+/** Erreurs courantes de yt-dlp (lignes « ERROR: … », en anglais) et leur explication. */
+const YTDLP_ERRORS = [
+	[/Private video|This video is private/i, 'Vidéo privée : seul son auteur peut la voir.'],
+	[/Sign in to confirm your age|age-restricted|inappropriate for some users/i, 'Vidéo soumise à une limite d’âge : YouTube exige une connexion, que yt-dlp ne fait pas ici.'],
+	[/Sign in to confirm you.re not a bot|confirm you are not a bot/i, 'YouTube demande de prouver qu’on n’est pas un robot. Réessaie plus tard, ou mets yt-dlp à jour.'],
+	[/not available in your country|geo.?restrict|blocked it in your country/i, 'Vidéo bloquée dans ton pays.'],
+	[/members-only|Join this channel/i, 'Vidéo réservée aux membres de la chaîne.'],
+	[/Premieres in|live event will begin|This live event/i, 'La vidéo n’est pas encore diffusée (première ou direct à venir).'],
+	[/Video unavailable|This video is unavailable|has been removed|does not exist|HTTP Error 404/i, 'Vidéo introuvable : elle a été supprimée, ou le lien est faux.'],
+	[/Unsupported URL/i, 'Ce site n’est pas pris en charge par yt-dlp, ou le lien ne mène pas à une vidéo.'],
+	[/Requested format is not available/i, 'Ce format n’existe pas pour cette vidéo. Essaie le mode « À éditer ».'],
+	[/HTTP Error 403|Forbidden/i, 'Le site refuse le téléchargement (HTTP 403). Mets yt-dlp à jour puis réessaie.'],
+	[/HTTP Error 429|Too Many Requests/i, 'Trop de téléchargements d’affilée : le site bloque temporairement. Réessaie dans quelques minutes.'],
+	[/Unable to download webpage|getaddrinfo|Failed to resolve|Connection refused|timed out|Network is unreachable/i, 'Pas de connexion à Internet, ou le site est injoignable.'],
+	[/No space left on device/i, 'Disque plein : libère de la place dans le dossier Téléchargements.'],
+	[/ffmpeg.*(not found|failed)|Postprocessing/i, 'La vidéo a été téléchargée mais l’assemblage image + son a échoué.'],
+];
+
 /**
  * Une installation système (que l'utilisateur met à jour) passe avant la copie embarquée,
  * qui vieillit avec l'installeur ; celle-ci se met à jour seule via `yt-dlp -U` (voir update()).
@@ -127,6 +145,8 @@ export class Ytdlp {
 
 	#explain(stderr, code) {
 		const error = stderr.split('\n').filter((line) => line.startsWith('ERROR')).pop()?.replace(/^ERROR:\s*/, '');
+		const known = YTDLP_ERRORS.find(([pattern]) => pattern.test(stderr))?.[1];
+		if (known) return known;
 		const hint = this.#bundled
 			? 'Si le site a changé, mets yt-dlp à jour avec le bouton ci-dessous.'
 			: 'Si le site a changé, mets yt-dlp à jour : winget upgrade yt-dlp.yt-dlp';

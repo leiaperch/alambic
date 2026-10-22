@@ -1,4 +1,4 @@
-import { access, mkdir, writeFile } from 'node:fs/promises';
+import { access, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { downloadFile } from './download.js';
 
@@ -88,7 +88,12 @@ export class Matting {
 	async #load() {
 		if (this.#session) return this.#session;
 		this.ort = await import('onnxruntime-node');
-		this.#session = await this.ort.InferenceSession.create(this.#path, { executionProviders: ['cpu'] });
+		try {
+			this.#session = await this.ort.InferenceSession.create(this.#path, { executionProviders: ['cpu'] });
+		} catch {
+			await rm(this.#path, { force: true });
+			throw new Error('Le modèle de détourage était abîmé et a été supprimé. Télécharge-le à nouveau dans la section Détourage.');
+		}
 		return this.#session;
 	}
 

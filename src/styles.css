@@ -439,6 +439,19 @@ button, input, select, textarea { font: inherit; color: inherit; }
 	pointer-events: none;
 }
 
+.stage__error {
+	position: absolute;
+	left: 16px;
+	right: 16px;
+	bottom: 16px;
+	margin: 0;
+	padding: 10px 14px;
+	border-radius: var(--radius-sm);
+	background: var(--error-soft);
+	color: var(--error);
+	white-space: pre-line;
+	z-index: 2;
+}
 .stage__audio { display: grid; place-items: center; }
 .stage__wave { width: 100%; max-height: 70%; object-fit: fill; }
 

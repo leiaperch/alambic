@@ -93,6 +93,7 @@ export class Queue {
 		row.meta.textContent = `${KIND_LABEL[item.kind]} · ${formatBytes(item.size)} → ${target}`;
 		const showProgress = status === STATUS.RUNNING || (status === STATUS.ANALYZING && progress > 0);
 		row.state.textContent = showProgress ? `${Math.round(progress * PERCENT)} %` : STATUS_LABEL[status];
+		row.root.title = status === STATUS.ERROR && entry.error ? entry.error : '';
 		row.bar.hidden = !showProgress;
 		row.bar.firstChild.style.transform = `scaleX(${progress})`;
 		this.#updateAction(row.action, entry);

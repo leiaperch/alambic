@@ -2,6 +2,7 @@ import { spawn, execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join, delimiter } from 'node:path';
 import { promisify } from 'node:util';
+import { explainFfmpeg } from './errors.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -72,16 +73,27 @@ export class Ffmpeg {
 		return hardware;
 	}
 
+	/** execFile avec traduction des échecs : délai dépassé, ou stderr de ffmpeg/ffprobe en message français. */
+	async #exec(binary, args, options) {
+		try {
+			return await execFileAsync(binary, args, { windowsHide: true, ...options });
+		} catch (error) {
+			if (error.killed) throw new Error('ffmpeg n’a pas répondu à temps : le fichier est peut-être très long ou endommagé.');
+			if (error.code === 'ENOENT') throw new Error('ffmpeg est introuvable. Réinstalle Alambic.');
+			throw new Error(explainFfmpeg(error.stderr?.toString()));
+		}
+	}
+
 	async probe(path) {
 		const args = ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', path];
-		const { stdout } = await execFileAsync(this.#bin.ffprobe, args, { timeout: PROBE_TIMEOUT_MS, maxBuffer: PROBE_MAX_BUFFER });
+		const { stdout } = await this.#exec(this.#bin.ffprobe, args, { timeout: PROBE_TIMEOUT_MS, maxBuffer: PROBE_MAX_BUFFER });
 		return JSON.parse(stdout);
 	}
 
 	/** Rend une image PNG en mémoire (aperçu, vignette). */
 	/** Sortie brute de ffmpeg en mémoire (pixels bruts pour le détourage, échantillons pour la séparation). */
 	async raw(args, { cwd } = {}) {
-		const { stdout } = await execFileAsync(this.#bin.ffmpeg, ['-v', 'error', ...args], {
+		const { stdout } = await this.#exec(this.#bin.ffmpeg, ['-v', 'error', ...args], {
 			cwd,
 			encoding: 'buffer',
 			timeout: RAW_TIMEOUT_MS,
@@ -93,7 +105,7 @@ export class Ffmpeg {
 
 	/** Lance ffmpeg pour ses mesures : renvoie stderr (astats, vidstabdetect…), sortie vers null. */
 	async measure(args, { cwd } = {}) {
-		const { stderr } = await execFileAsync(this.#bin.ffmpeg, ['-hide_banner', '-nostats', ...args], {
+		const { stderr } = await this.#exec(this.#bin.ffmpeg, ['-hide_banner', '-nostats', ...args], {
 			cwd,
 			timeout: RAW_TIMEOUT_MS,
 			maxBuffer: PROBE_MAX_BUFFER,
@@ -103,7 +115,7 @@ export class Ffmpeg {
 	}
 
 	async frame(args, { cwd } = {}) {
-		const { stdout } = await execFileAsync(this.#bin.ffmpeg, ['-v', 'error', ...args, '-f', 'image2pipe', '-c:v', 'png', 'pipe:1'], {
+		const { stdout } = await this.#exec(this.#bin.ffmpeg, ['-v', 'error', ...args, '-f', 'image2pipe', '-c:v', 'png', 'pipe:1'], {
 			cwd,
 			encoding: 'buffer',
 			timeout: FRAME_TIMEOUT_MS,
@@ -137,7 +149,7 @@ export class Ffmpeg {
 				this.#jobs.delete(jobId);
 				if (code === 0) resolve();
 				else if (signal || child.killed) reject(new Error('Annulé'));
-				else reject(new Error(stderr.trim().split('\n').slice(-3).join('\n') || `ffmpeg a quitté avec le code ${code}`));
+				else reject(new Error(explainFfmpeg(stderr)));
 			});
 		});
 	}

@@ -34,11 +34,18 @@ export class PageGrid {
 	}
 
 	async #load() {
-		this.#count = await pdfPageCount(this.#item);
+		try {
+			this.#count = await pdfPageCount(this.#item);
+		} catch (error) {
+			this.#summary.textContent = error.message;
+			this.#summary.setAttribute('role', 'alert');
+			return;
+		}
 		this.render();
 		for (let page = 1; page <= this.#count; page++) {
 			if (!this.#root.isConnected && page > 1) return;
-			const blob = await pdfPagePreview(this.#item, page, THUMB_WIDTH);
+			const blob = await pdfPagePreview(this.#item, page, THUMB_WIDTH).catch(() => null);
+			if (!blob) continue;
 			this.#thumbs.set(page, URL.createObjectURL(blob));
 			const image = this.#list.querySelector(`#page-thumb-${page}`);
 			if (image) image.src = this.#thumbs.get(page);

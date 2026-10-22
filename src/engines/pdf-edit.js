@@ -8,13 +8,29 @@ const NUMBER_MARGIN = 24;
 const NUMBER_GRAY = 0.25;
 const PERCENT = 100;
 
+/** pdf-lib refuse les PDF chiffrés et lève des erreurs anglaises pour les fichiers abîmés. */
+export function explainPdf(error, name = 'ce PDF') {
+	const text = `${error?.name ?? ''} ${error?.message ?? ''}`;
+	if (/Password|encrypted/i.test(text)) return `${name} est protégé par un mot de passe. Retire la protection (dans le lecteur PDF qui l’a créé) puis réessaie.`;
+	if (/Invalid ?PDF|Failed to parse|No PDF header|Missing PDF|startxref|Unexpected/i.test(text)) return `${name} est illisible : fichier abîmé ou pas vraiment un PDF.`;
+	return error?.message ?? String(error);
+}
+
+export async function loadPdfLib(bytes, name) {
+	try {
+		return await PDFDocument.load(bytes);
+	} catch (error) {
+		throw new Error(explainPdf(error, name));
+	}
+}
+
 /**
  * Applique la grille de pages (ordre, rotation, suppression), un filigrane et des numéros de page.
  * `pages` : [{ page: n (1-based), rotate: 0|90|180|270 }] dans l'ordre voulu ; null = toutes, sans changement.
  * Fonction sans dépendance au navigateur : testable sous Node.
  */
-export async function editPdfBytes(bytes, { pages = null, watermark = null, pageNumbers = false } = {}) {
-	const source = await PDFDocument.load(bytes);
+export async function editPdfBytes(bytes, { pages = null, watermark = null, pageNumbers = false, name } = {}) {
+	const source = await loadPdfLib(bytes, name);
 	const plan = pages ?? source.getPageIndices().map((index) => ({ page: index + 1, rotate: 0 }));
 	if (!plan.length) throw new Error('Toutes les pages ont été retirées.');
 	const target = await PDFDocument.create();

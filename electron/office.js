@@ -39,6 +39,22 @@ const run = (script, env, timeout) => execFileAsync(
 	{ env: { ...process.env, ...env }, timeout, windowsHide: true },
 );
 
+const WORD_ERRORS = [
+	[/password|mot de passe/i, 'Document protégé par un mot de passe : ouvre-le dans Word, retire le mot de passe, enregistre, puis réessaie.'],
+	[/being used by another|used by another process|verrouill|locked|en cours d.utilisation/i, 'Le document est ouvert ailleurs (Word, OneDrive…). Ferme-le puis réessaie.'],
+	[/80040154|Cannot create ActiveX|Retrieving the COM class factory/i, 'Microsoft Word est introuvable ou mal installé sur ce poste.'],
+	[/corrupt|endommag|cannot be opened|ne peut pas ouvrir/i, 'Word n’arrive pas à ouvrir ce document : il est peut-être endommagé.'],
+	[/Command failed.*SaveAs|SaveAs2|denied|refus/i, 'Word n’a pas pu enregistrer le résultat. Vérifie que le dossier de sortie n’est pas protégé, ou choisis-en un autre.'],
+];
+
+/** Erreur de PowerShell/Word → message ; un délai dépassé signale presque toujours une boîte de dialogue ouverte dans Word. */
+function explainWord(error) {
+	if (error.killed) return 'Word n’a pas répondu en 3 minutes : une boîte de dialogue attend peut-être dans Word (document réparé, macros). Ouvre le document dans Word une fois, puis réessaie.';
+	const text = `${error.stderr ?? ''} ${error.message ?? ''}`;
+	for (const [pattern, message] of WORD_ERRORS) if (pattern.test(text)) return message;
+	return 'Word n’a pas pu convertir ce document.';
+}
+
 export async function isWordAvailable() {
 	try {
 		const { stdout } = await run("[bool]([Type]::GetTypeFromProgID('Word.Application'))", {}, WORD_CHECK_TIMEOUT_MS);
@@ -54,7 +70,6 @@ export async function convertWithWord(inputPath, outputPath, outputId) {
 	try {
 		await run(SCRIPT, { ALAMBIC_IN: inputPath, ALAMBIC_OUT: outputPath, ALAMBIC_FORMAT: String(format) }, WORD_TIMEOUT_MS);
 	} catch (error) {
-		const detail = (error.stderr || error.message || '').trim().split('\n').slice(0, 2).join(' ');
-		throw new Error(`Word n'a pas pu convertir le fichier. ${detail}`);
+		throw new Error(explainWord(error));
 	}
 }

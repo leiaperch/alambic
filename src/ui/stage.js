@@ -183,6 +183,20 @@ export class Stage {
 
 	#frameAt = null;
 
+	/** Message d'erreur affiché sur la zone d'aperçu (aperçu du rendu, page de PDF) ; null le retire. */
+	#showError(message) {
+		let notice = this.#viewport?.querySelector('.stage__error');
+		if (!message) {
+			notice?.remove();
+			return;
+		}
+		if (!notice) {
+			notice = h('p', { class: 'stage__error', role: 'alert' });
+			this.#viewport.append(notice);
+		}
+		notice.textContent = message;
+	}
+
 	#layoutCrop() {
 		const active = this.#store.active;
 		if (!active?.info?.width || !this.#media || this.#media.tagName === 'AUDIO') return;
@@ -211,8 +225,9 @@ export class Stage {
 			if (this.#renderUrl) URL.revokeObjectURL(this.#renderUrl);
 			this.#renderUrl = pngUrl(bytes);
 			this.#render.src = this.#renderUrl;
+			this.#showError(null);
 		} catch (error) {
-			if (token === this.#renderToken) this.#render.alt = `Aperçu impossible : ${error.message}`;
+			if (token === this.#renderToken) this.#showError(`Aperçu impossible. ${error.message}`);
 		} finally {
 			if (token === this.#renderToken) this.#viewport.classList.remove('stage__viewport--busy');
 		}
@@ -341,7 +356,12 @@ export class Stage {
 		const prev = h('button', { type: 'button', class: 'btn btn--icon', 'aria-label': 'Page précédente', on: { click: () => this.#showPage(entry, this.#page - 1, page, label) } }, icon(ICONS.chevronLeft));
 		const next = h('button', { type: 'button', class: 'btn btn--icon', 'aria-label': 'Page suivante', on: { click: () => this.#showPage(entry, this.#page + 1, page, label) } }, icon(ICONS.chevronRight));
 		this.#viewport.append(h('div', { class: 'stage__pdf' }, page), h('div', { class: 'pager' }, prev, label, next));
-		this.#pages = await pdfPageCount(item);
+		try {
+			this.#pages = await pdfPageCount(item);
+		} catch (error) {
+			this.#showError(error.message);
+			return;
+		}
 		this.#showPage(entry, 1, page, label);
 	}
 
@@ -349,7 +369,14 @@ export class Stage {
 		if (number < 1 || number > this.#pages) return;
 		this.#page = number;
 		label.textContent = `Page ${number} sur ${this.#pages}`;
-		const blob = await pdfPagePreview(entry.item, number, PREVIEW_PAGE_WIDTH);
+		let blob;
+		try {
+			blob = await pdfPagePreview(entry.item, number, PREVIEW_PAGE_WIDTH);
+			this.#showError(null);
+		} catch (error) {
+			this.#showError(error.message);
+			return;
+		}
 		if (image.src) URL.revokeObjectURL(image.src);
 		image.src = URL.createObjectURL(blob);
 		image.alt = `Page ${number}`;

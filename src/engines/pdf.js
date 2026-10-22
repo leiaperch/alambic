@@ -1,7 +1,7 @@
 import * as pdfjs from 'pdfjs-dist';
 import { PDFDocument } from 'pdf-lib';
 import { OUTPUTS } from '../../shared/formats.js';
-import { editPdfBytes } from './pdf-edit.js';
+import { editPdfBytes, explainPdf, loadPdfLib } from './pdf-edit.js';
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).href;
 
@@ -55,7 +55,7 @@ function tokenBounds(token, original, pageCount) {
 
 async function readBytes(item) {
 	const response = await fetch(`media://item/${item.id}`);
-	if (!response.ok) throw new Error(`Lecture impossible : ${item.name}.`);
+	if (!response.ok) throw new Error(`« ${item.name} » a été déplacé ou supprimé depuis son ajout.`);
 	return new Uint8Array(await response.arrayBuffer());
 }
 
@@ -63,7 +63,13 @@ async function readBytes(item) {
 async function withPdf(item, task) {
 	const bytes = await readBytes(item);
 	const loadingTask = pdfjs.getDocument({ data: bytes.slice() });
-	const doc = await loadingTask.promise;
+	let doc;
+	try {
+		doc = await loadingTask.promise;
+	} catch (error) {
+		await loadingTask.destroy();
+		throw new Error(explainPdf(error, `« ${item.name} »`));
+	}
 	try {
 		return await task(doc);
 	} finally {
@@ -175,7 +181,7 @@ async function saveText(item, doc, pages, { outputDir, onProgress }) {
 }
 
 async function savePages(item, pages, { outputDir, onProgress }) {
-	const source = await PDFDocument.load(await readBytes(item));
+	const source = await loadPdfLib(await readBytes(item), `« ${item.name} »`);
 	const target = await PDFDocument.create();
 	const copies = await target.copyPages(source, pages.map((page) => page - 1));
 	for (const [index, copy] of copies.entries()) {
@@ -199,7 +205,7 @@ export async function convertPdf(item, recipe, { outputDir, onProgress } = {}) {
 			return savePages(item, parsePageRange(recipe.pages, count), options);
 		}
 		case 'pdf-edit': {
-			const bytes = await editPdfBytes(await readBytes(item), { pages: recipe.pageOrder, watermark: recipe.watermark, pageNumbers: recipe.pageNumbers });
+			const bytes = await editPdfBytes(await readBytes(item), { pages: recipe.pageOrder, watermark: recipe.watermark, pageNumbers: recipe.pageNumbers, name: `« ${item.name} »` });
 			onProgress?.(1);
 			return [await window.alambic.save(item.id, 'pdf', bytes, outputDir, ' - modifié')];
 		}
@@ -243,9 +249,13 @@ async function decodeBitmap(blob) {
 async function embedImage(pdf, item) {
 	const bytes = await readBytes(item);
 	const ext = item.ext.toLowerCase();
-	if (PNG_EXTENSIONS.has(ext)) return pdf.embedPng(bytes);
-	if (JPG_EXTENSIONS.has(ext)) return pdf.embedJpg(bytes);
-	return pdf.embedPng(await pngFromDecodable({ ...item, ext }, bytes));
+	try {
+		if (PNG_EXTENSIONS.has(ext)) return await pdf.embedPng(bytes);
+		if (JPG_EXTENSIONS.has(ext)) return await pdf.embedJpg(bytes);
+		return await pdf.embedPng(await pngFromDecodable({ ...item, ext }, bytes));
+	} catch {
+		throw new Error(`« ${item.name} » ne peut pas être mis dans un PDF : image illisible ou format non pris en charge (HEIC, RAW…).`);
+	}
 }
 
 export async function imagesToPdf(items, { outputDir, onProgress } = {}) {
@@ -263,7 +273,7 @@ export async function imagesToPdf(items, { outputDir, onProgress } = {}) {
 export async function mergePdfs(items, { outputDir, onProgress } = {}) {
 	const target = await PDFDocument.create();
 	for (const [index, item] of items.entries()) {
-		const source = await PDFDocument.load(await readBytes(item));
+		const source = await loadPdfLib(await readBytes(item), `« ${item.name} »`);
 		const copies = await target.copyPages(source, source.getPageIndices());
 		for (const copy of copies) target.addPage(copy);
 		onProgress?.((index + 1) / items.length);
