@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob: data: media:; media-src 'self' blob: media:; connect-src 'self' media:; worker-src 'self' blob:; style-src 'self'; font-src 'self' data:; script-src 'self'">
+<title>Alambic</title>
+</head>
+<body>
+<div class="app" id="app">
+	<header class="titlebar">
+		<div class="titlebar__brand">
+			<svg class="titlebar__logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6M10 3v5.5L5.6 16a3 3 0 0 0 2.6 4.5h7.6a3 3 0 0 0 2.6-4.5L14 8.5V3"/><path d="M7.5 14h9"/></svg>
+			<span class="titlebar__name">Alambic</span>
+		</div>
+		<p class="titlebar__engine" id="engine-status" role="status"></p>
+	</header>
+
+	<p class="banner" id="banner" role="alert" hidden></p>
+
+	<main class="workspace">
+		<section class="panel queue" aria-labelledby="queue-title">
+			<div class="panel__head">
+				<h2 class="panel__title" id="queue-title">Fichiers</h2>
+				<div class="panel__tools">
+					<button type="button" class="btn btn--icon" id="add-files" title="Ajouter des fichiers" aria-label="Ajouter des fichiers"></button>
+				</div>
+			</div>
+			<form class="linkbar" id="linkbar">
+				<label class="visually-hidden" for="link-url">Lien d’une vidéo ou d’un son</label>
+				<input class="input linkbar__url" id="link-url" name="url" type="url" placeholder="Coller un lien YouTube…" autocomplete="off" spellcheck="false" required>
+				<div class="linkbar__row">
+					<label class="visually-hidden" for="link-mode">Récupérer en</label>
+					<select class="input linkbar__mode" id="link-mode" name="mode">
+						<option value="mp4">Vidéo MP4</option>
+						<option value="mp3">Son MP3</option>
+						<option value="edit">À éditer (meilleure qualité)</option>
+					</select>
+					<button type="submit" class="btn btn--primary">Télécharger</button>
+				</div>
+				<p class="linkbar__error" id="link-error" role="alert" hidden></p>
+			</form>
+			<ul class="downloads" id="downloads" aria-label="Téléchargements en cours"></ul>
+			<div class="queue__bulk" id="queue-bulk" hidden></div>
+			<ul class="queue__list" id="queue-list" role="listbox" aria-label="Fichiers à convertir" aria-multiselectable="true" tabindex="0"></ul>
+			<div class="queue__empty" id="queue-empty">
+				<p class="queue__empty-title">Dépose tes fichiers</p>
+				<p class="queue__empty-text">Vidéos, sons, images, PDF ou documents Word, un par un ou par dossiers entiers.</p>
+				<button type="button" class="btn btn--primary" id="add-files-empty">Choisir des fichiers</button>
+			</div>
+		</section>
+
+		<section class="panel stage" id="stage" aria-label="Aperçu et édition"></section>
+
+		<aside class="panel inspector" id="inspector" aria-label="Réglages de conversion"></aside>
+	</main>
+
+	<footer class="dock">
+		<div class="dock__output">
+			<span class="dock__label" id="output-label">Enregistrer</span>
+			<div class="segmented" role="radiogroup" aria-labelledby="output-label">
+				<label class="segmented__option"><input type="radio" name="output-target" value="beside" checked><span>À côté des originaux</span></label>
+				<label class="segmented__option"><input type="radio" name="output-target" value="folder"><span id="output-folder-name">Dans un dossier…</span></label>
+			</div>
+		</div>
+		<p class="dock__summary" id="dock-summary" aria-live="polite"></p>
+		<button type="button" class="btn btn--primary btn--large" id="convert-all" disabled>Tout convertir</button>
+	</footer>
+
+	<div class="dropveil" id="dropveil" hidden><p>Lâche pour ajouter</p></div>
+</div>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
