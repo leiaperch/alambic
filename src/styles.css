@@ -94,14 +94,15 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 .app {
 	display: grid;
-	grid-template-rows: var(--titlebar) auto minmax(0, 1fr) auto;
-	grid-template-areas: 'title' 'banner' 'work' 'dock';
+	grid-template-rows: var(--titlebar) auto auto minmax(0, 1fr) auto;
+	grid-template-areas: 'title' 'banner' 'extension' 'work' 'dock';
 	height: 100vh;
 }
 .titlebar { grid-area: title; }
 .banner, .update { grid-area: banner; }
 .update { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 8px 16px; background: var(--accent-soft); border-bottom: 1px solid var(--line); }
 .workspace { grid-area: work; }
+.extension-slot { grid-area: extension; }
 .dock { grid-area: dock; }
 
 .titlebar {

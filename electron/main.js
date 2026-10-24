@@ -6,7 +6,9 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Ffmpeg } from './ffmpeg.js';
 import { Library, isAnimatedWebp, summarize } from './library.js';
-import { buildJob, buildPreviewArgs, buildThumbArgs, buildStabilizeArgs, buildNoiseFloorArgs, parseNoiseFloor } from './recipe.js';
+import { buildJob, buildPreviewArgs, buildThumbArgs, buildStabilizeArgs, buildNoiseFloorArgs, parseNoiseFloor, estimateOutput } from './recipe.js';
+import extensions from './extensions.js';
+import { createExtensionHost, mountExtensions } from './extension-host.js';
 import { Logos, Presets } from './presets.js';
 import { Updater } from './updater.js';
 import { explain } from './errors.js';
@@ -390,6 +392,30 @@ async function runJob(jobId, id, recipe, outputDir) {
 	return outputPath;
 }
 
+function cancelJob(jobId) {
+	ffmpeg.cancel(jobId);
+	upscaler.cancel(jobId);
+	stems.cancel(jobId);
+}
+
+function estimate(id, recipe) {
+	const merged = { ...emptyRecipe(recipe.output), ...recipe };
+	return estimateOutput(sourceOf(library.get(id), merged), merged);
+}
+
+function extensionHost() {
+	return createExtensionHost({
+		userData: app.getPath('userData'),
+		handle,
+		send: (channel, ...args) => window?.webContents.send(channel, ...args),
+		analyze,
+		estimate,
+		runJob,
+		cancelJob,
+		addFiles: async (paths) => (await library.add(paths)).map(publicItem),
+	});
+}
+
 /** Toute erreur renvoyée à l'interface passe par explain() : message français, jamais un code système brut. */
 function handle(channel, fn) {
 	ipcMain.handle(channel, async (...args) => {
@@ -469,11 +495,7 @@ function registerIpc() {
 		return ffmpeg.frame(buildPreviewArgs(sourceOf(library.get(id), merged), merged, Number(time) || 0, PREVIEW_MAX_WIDTH), { cwd });
 	});
 	handle('job:run', (_event, jobId, id, recipe, outputDir) => runJob(jobId, id, recipe, outputDir ?? null));
-	handle('job:cancel', (_event, jobId) => {
-		ffmpeg.cancel(jobId);
-		upscaler.cancel(jobId);
-		stems.cancel(jobId);
-	});
+	handle('job:cancel', (_event, jobId) => cancelJob(jobId));
 	handle('file:save', async (_event, id, ext, bytes, outputDir, suffix) => {
 		const path = await library.outputPath(id, String(ext), outputDir ?? null, suffix ? String(suffix) : '');
 		await writeFile(path, Buffer.from(bytes));
@@ -521,6 +543,7 @@ app.whenReady().then(async () => {
 	ytdlp = ytdlpFound ? new Ytdlp(ytdlpFound) : null;
 	status = { ffmpeg: engine.ok, ffmpegPath: engine.path ?? null, hardware: engine.hardware ?? {}, word, ytdlp: Boolean(ytdlpFound), ytdlpBundled: ytdlpFound?.bundled ?? false };
 	registerIpc();
+	await mountExtensions(extensions, extensionHost(), (error) => console.error('Extension non chargée :', error));
 	createWindow();
 	await openFromArgv(process.argv);
 	if (app.isPackaged) updater.start((info) => window?.webContents.send('update:ready', info));

@@ -6,7 +6,22 @@ const call = (channel, ...args) => ipcRenderer.invoke(channel, ...args).catch((e
 	throw new Error(String(error.message ?? error).replace(REMOTE_PREFIX, ''));
 });
 
+/** Même motif que electron/extension-host.js : le preload est un script isolé, il ne peut pas l'importer. */
+const EXTENSION_CHANNEL = /^ext:[a-z0-9][a-z0-9:-]*$/;
+const extensionChannel = (channel) => {
+	if (typeof channel !== 'string' || !EXTENSION_CHANNEL.test(channel)) throw new Error(`Canal d'extension invalide : ${channel}`);
+	return channel;
+};
+
 contextBridge.exposeInMainWorld('alambic', {
+	ext: {
+		invoke: (channel, ...args) => call(extensionChannel(channel), ...args),
+		on: (channel, callback) => {
+			const listener = (_event, ...payload) => callback(...payload);
+			ipcRenderer.on(extensionChannel(channel), listener);
+			return () => ipcRenderer.removeListener(channel, listener);
+		},
+	},
 	status: () => call('app:status'),
 	pickFiles: () => call('files:pick'),
 	addFiles: (files) => call('files:add', files.map((file) => webUtils.getPathForFile(file)).filter(Boolean)),
