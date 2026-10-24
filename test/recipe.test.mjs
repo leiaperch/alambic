@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildJob, outputDuration, outputHeight, spriteLayout } from '../electron/recipe.js';
+import { buildJob, estimateOutput, outputDuration, outputHeight, spriteLayout } from '../electron/recipe.js';
 import { emptyRecipe } from '../shared/formats.js';
 
 const video = { path: 'in.mp4', kind: 'video', width: 1280, height: 720, duration: 6, hasAudio: true, fps: 30 };
@@ -60,4 +60,23 @@ test('planche de sprites presque carrée et bornée', () => {
 	assert.deepEqual(spriteLayout(3, 8), { columns: 5, rows: 5, count: 24 });
 	assert.deepEqual(spriteLayout(2, 10, 4), { columns: 4, rows: 5, count: 20 });
 	assert.equal(spriteLayout(1000, 30).count, 400);
+});
+
+test('estimation : la cible de 8 Mo sur 10 min de 4K se heurte au plancher de débit', () => {
+	const source = { path: 'c.mp4', kind: 'video', width: 3840, height: 2160, duration: 600, hasAudio: true, fps: 30 };
+	const estimate = estimateOutput(source, recipe({ output: 'mp4', targetSizeMb: 7.44 }));
+	assert.equal(estimate.duration, 600);
+	assert.ok(Math.abs(estimate.sizeMb - 18.15) < 0.01);
+});
+
+test('estimation : une cible atteignable est retrouvée, sans audio si le son est coupé', () => {
+	const estimate = estimateOutput(video, recipe({ output: 'mp4', targetSizeMb: 2, mute: true }));
+	assert.ok(Math.abs(estimate.sizeMb - 2) < 0.01);
+	assert.equal(estimate.width, 1280);
+});
+
+test('estimation : pas de poids prévu sans taille cible ni pour un GIF', () => {
+	assert.equal(estimateOutput(video, recipe({ output: 'mp4' })).sizeMb, null);
+	assert.equal(estimateOutput(video, recipe({ output: 'gif', targetSizeMb: 2 })).sizeMb, null);
+	assert.equal(estimateOutput(video, recipe({ output: 'png' })).duration, 0);
 });
