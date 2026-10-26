@@ -313,11 +313,29 @@ function stillCodecArgs(outputId, recipe) {
 }
 
 /** Débit vidéo pour atteindre un poids cible, audio déduit. */
-function targetBitrateKbps(recipe, duration, hasAudio) {
+export function targetBitrateKbps(recipe, duration, hasAudio) {
 	if (!recipe.targetSizeMb || duration <= 0) return null;
 	const totalKbps = (recipe.targetSizeMb * BYTES_PER_MB * BITS_PER_BYTE) / duration / 1000;
 	const audioKbps = hasAudio ? VIDEO_AUDIO_KBPS : 0;
 	return Math.max(MIN_VIDEO_KBPS, Math.round(totalKbps - audioKbps));
+}
+
+function keepsAudio(source, recipe) {
+	return Boolean(OUTPUTS[recipe.output]?.audio && source.hasAudio && !recipe.mute && !recipe.boomerang);
+}
+
+/**
+ * Durée, dimensions et poids prévus d'une sortie, sans rien encoder. Le poids n'est connu que pour une vidéo
+ * avec une taille cible : le débit vidéo a un plancher, la cible peut donc être dépassée.
+ */
+export function estimateOutput(source, recipe) {
+	const output = OUTPUTS[recipe.output];
+	const duration = output?.still ? 0 : outputDuration(source, recipe);
+	const result = { duration, width: outputWidth(source, recipe), height: outputHeight(source, recipe), sizeMb: null };
+	const videoKbps = output?.motion && output.audio ? targetBitrateKbps(recipe, duration, keepsAudio(source, recipe)) : null;
+	if (videoKbps === null) return result;
+	const totalKbps = videoKbps + (keepsAudio(source, recipe) ? VIDEO_AUDIO_KBPS : 0);
+	return { ...result, sizeMb: (totalKbps * 1000 * duration) / BITS_PER_BYTE / BYTES_PER_MB };
 }
 
 /**
@@ -444,7 +462,7 @@ function buildMotionJob(source, recipe, outputPath, hardware) {
 	const outputId = recipe.output;
 	const isAnim = ['gif', 'webp-anim', 'apng'].includes(outputId);
 	const duration = outputDuration(source, recipe);
-	const keepAudio = OUTPUTS[outputId].audio && source.hasAudio && !recipe.mute && !recipe.boomerang;
+	const keepAudio = keepsAudio(source, recipe);
 
 	const video = pictureChain(source, recipe, { evenDimensions: !isAnim });
 	if (recipe.speed !== 1) video.push(`setpts=PTS/${recipe.speed}`);

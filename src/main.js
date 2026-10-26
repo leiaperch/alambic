@@ -7,6 +7,7 @@ import { Stage } from './ui/stage.js';
 import { Inspector } from './ui/inspector.js';
 import { LinkBar } from './ui/links.js';
 import { h, icon, ICONS } from './dom.js';
+import extensions from './extensions.js';
 
 const store = new Store();
 const runner = new Runner(store);
@@ -104,6 +105,19 @@ function showUpdate(version) {
 	notice.hidden = false;
 }
 
+/** Panneaux d'extension : l'échec de l'un ne bloque pas l'interface. */
+function mountExtensions() {
+	const slot = document.getElementById('extension-slot');
+	for (const extension of extensions) {
+		try {
+			extension.mount({ slot, store, runner });
+		} catch (error) {
+			console.error('Extension non chargée :', error);
+		}
+	}
+	slot.hidden = slot.childElementCount === 0;
+}
+
 async function start() {
 	const addButton = document.getElementById('add-files');
 	addButton.append(icon(ICONS.add));
@@ -122,6 +136,7 @@ async function start() {
 		banner.textContent = 'ffmpeg est introuvable. Installe-le avec « winget install Gyan.FFmpeg » puis relance Alambic.';
 	}
 	if (!store.status.ytdlp) links.disable('yt-dlp est introuvable : installe-le avec « winget install yt-dlp.yt-dlp » puis relance Alambic.');
+	mountExtensions();
 	queue.render();
 	const opened = await window.alambic.initialFiles();
 	if (opened.length) runner.ingest(opened);
