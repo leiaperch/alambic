@@ -12,6 +12,7 @@ export function assertExtensionChannel(channel) {
 export function createExtensionHost(core) {
 	return Object.freeze({
 		userData: core.userData,
+		status: () => ({ ...core.status() }),
 		handle(channel, fn) {
 			assertExtensionChannel(channel);
 			core.handle(channel, fn);

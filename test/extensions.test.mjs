@@ -9,7 +9,7 @@ function fakeCore() {
 	return {
 		calls,
 		core: {
-			userData: 'C:/data', handle: record('handle'), send: record('send'), analyze: record('analyze'),
+			userData: 'C:/data', status: () => ({ word: true }), handle: record('handle'), send: record('send'), analyze: record('analyze'),
 			estimate: record('estimate'), runJob: record('runJob'), cancelJob: record('cancelJob'), addFiles: record('addFiles'),
 		},
 	};
@@ -31,7 +31,7 @@ test('une extension ne peut ouvrir que des canaux ext:', () => {
 test('l\'hôte est figé et n\'expose que les opérations prévues', () => {
 	const host = createExtensionHost(fakeCore().core);
 	assert.ok(Object.isFrozen(host));
-	assert.deepEqual(Object.keys(host).sort(), ['addFiles', 'analyze', 'cancelJob', 'estimate', 'handle', 'runJob', 'send', 'userData']);
+	assert.deepEqual(Object.keys(host).sort(), ['addFiles', 'analyze', 'cancelJob', 'estimate', 'handle', 'runJob', 'send', 'status', 'userData']);
 });
 
 test('runJob passe un dossier de sortie nul par défaut', () => {
@@ -53,4 +53,11 @@ test('une extension en échec n\'empêche pas les suivantes', async () => {
 test('motif des canaux : préfixe ext: et caractères simples seulement', () => {
 	assertExtensionChannel('ext:pro:run');
 	for (const bad of ['ext:', 'ext:Pro', 'ext:a b', 'extension:x', 42]) assert.throws(() => assertExtensionChannel(bad));
+});
+
+test('l\'état transmis est une copie : l\'extension ne peut pas le modifier', () => {
+	const state = { word: true };
+	const host = createExtensionHost({ ...fakeCore().core, status: () => state });
+	host.status().word = false;
+	assert.equal(state.word, true);
 });

@@ -406,6 +406,7 @@ function estimate(id, recipe) {
 function extensionHost() {
 	return createExtensionHost({
 		userData: app.getPath('userData'),
+		status: () => status,
 		handle,
 		send: (channel, ...args) => window?.webContents.send(channel, ...args),
 		analyze,
